@@ -1,0 +1,220 @@
+---
+title: Development environment setup
+description: Set up your local development environment for vLLM development
+---
+
+This guide walks you through setting up your development environment for contributing to vLLM.
+
+## Clone the repository
+
+The first step is to clone the GitHub repository:
+
+```bash
+git clone https://github.com/vllm-project/vllm.git
+cd vllm
+```
+
+## Python environment setup
+
+vLLM is compatible with Python versions 3.10 to 3.13. However, vLLM's default [Dockerfile](https://github.com/vllm-project/vllm/blob/main/docker/Dockerfile) ships with Python 3.12 and tests in CI (except `mypy`) are run with Python 3.12.
+
+<Tip>
+  We recommend developing with **Python 3.12** to minimize the chance of your local environment clashing with our CI environment.
+</Tip>
+
+Configure your Python virtual environment:
+
+<Steps>
+  <Step title="Create virtual environment">
+    Create and activate a Python virtual environment:
+
+    ```bash
+    python -m venv venv
+    source venv/bin/activate  # On Windows: venv\Scripts\activate
+    ```
+  </Step>
+
+  <Step title="Install uv (recommended)">
+    Install `uv` for faster package management:
+
+    ```bash
+    pip install uv
+    ```
+  </Step>
+</Steps>
+
+## Installation options
+
+### Python-only development
+
+If you are only developing vLLM's Python code, install vLLM using:
+
+```bash
+VLLM_USE_PRECOMPILED=1 uv pip install -e .
+```
+
+This uses pre-compiled binaries and skips the compilation of C++/CUDA code, which is much faster.
+
+### Python and CUDA/C++ development
+
+If you are developing vLLM's Python and CUDA/C++ code:
+
+<Steps>
+  <Step title="Install PyTorch">
+    Install PyTorch first:
+
+    ```bash
+    uv pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu129
+    ```
+  </Step>
+
+  <Step title="Install build dependencies">
+    Install the necessary build dependencies, skipping `torch` as it was installed in the previous step:
+
+    ```bash
+    grep -v '^torch==' requirements/build.txt | uv pip install -r -
+    ```
+  </Step>
+
+  <Step title="Install vLLM from source">
+    Install vLLM without build isolation:
+
+    ```bash
+    uv pip install -e . --no-build-isolation
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  If any of the above commands fails with `Python.h: No such file or directory`, install `python3-dev` with `sudo apt install python3-dev`.
+</Note>
+
+### Installation for other hardware
+
+For more details about installing from source and installing for other hardware platforms (AMD, Intel, etc.), check out the [installation instructions](/getting-started/installation) for your hardware and head to the "Build wheel from source" section.
+
+## Incremental compilation workflow
+
+For an optimized workflow when iterating on C++/CUDA kernels, see the [Incremental Compilation Workflow](https://github.com/vllm-project/vllm/blob/main/docs/contributing/incremental_build.md) for recommendations.
+
+## Setting up linting
+
+vLLM uses `pre-commit` to lint and format the codebase.
+
+<Steps>
+  <Step title="Install pre-commit">
+    ```bash
+    uv pip install pre-commit
+    ```
+  </Step>
+
+  <Step title="Install Git hooks">
+    ```bash
+    pre-commit install
+    ```
+  </Step>
+</Steps>
+
+vLLM's `pre-commit` hooks will now run automatically every time you commit.
+
+### Manual pre-commit usage
+
+You can manually run the `pre-commit` hooks using:
+
+```bash
+pre-commit run     # runs on staged files
+pre-commit run -a  # runs on all files (short for --all-files)
+```
+
+### CI-only hooks
+
+Some `pre-commit` hooks only run in CI. If you need to run them locally:
+
+```bash
+pre-commit run --hook-stage manual markdownlint
+pre-commit run --hook-stage manual mypy-3.10
+```
+
+## Documentation setup
+
+vLLM uses MkDocs for documentation. To preview documentation locally:
+
+<Steps>
+  <Step title="Install documentation dependencies">
+    ```bash
+    uv pip install -r requirements/docs.txt
+    ```
+
+    <Note>
+      Ensure your Python version is compatible with the plugins (e.g., `mkdocs-awesome-nav` requires Python 3.10+).
+    </Note>
+  </Step>
+
+  <Step title="Run the development server">
+    ```bash
+    mkdocs serve                           # with API ref (~10 minutes)
+    API_AUTONAV_EXCLUDE=vllm mkdocs serve  # API ref off (~15 seconds)
+    ```
+  </Step>
+
+  <Step title="Preview in browser">
+    Once you see `Serving on http://127.0.0.1:8000/` in the logs, open [http://127.0.0.1:8000/](http://127.0.0.1:8000/) in your browser.
+  </Step>
+</Steps>
+
+For additional features and advanced configurations, refer to:
+- [MkDocs documentation](https://www.mkdocs.org/)
+- [Material for MkDocs documentation](https://squidfunk.github.io/mkdocs-material/)
+
+## Testing setup
+
+vLLM uses `pytest` to test the codebase.
+
+### Install test dependencies
+
+```bash
+# Install the test dependencies used in CI (CUDA only)
+uv pip install -r requirements/common.txt -r requirements/dev.txt --torch-backend=auto
+
+# Install some common test dependencies (hardware agnostic)
+uv pip install pytest pytest-asyncio
+```
+
+### Running tests
+
+```bash
+# Run all tests
+pytest tests/
+
+# Run tests for a single test file with detailed output
+pytest -s -v tests/test_logger.py
+```
+
+<Warning>
+  **Known limitations:**
+  - The repository is not fully checked by `mypy`
+  - Not all unit tests pass when run on CPU platforms. If you don't have access to a GPU platform to run unit tests locally, rely on the continuous integration system
+</Warning>
+
+## Verify your setup
+
+To verify your development environment is set up correctly:
+
+```bash
+# Import vLLM in Python
+python -c "import vllm; print(vllm.__version__)"
+
+# Run a simple test
+pytest tests/test_logger.py -v
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Testing guide" icon="flask" href="/contributing/testing">
+    Learn how to write and run tests
+  </Card>
+  <Card title="Adding models" icon="brain" href="/contributing/adding-models">
+    Implement new model architectures
+  </Card>
+</CardGroup>

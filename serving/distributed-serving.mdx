@@ -1,0 +1,476 @@
+---
+title: Multi-GPU distributed serving
+description: Deploy vLLM across multiple GPUs and nodes using tensor parallelism, pipeline parallelism, and data parallelism.
+---
+
+vLLM supports distributed inference across multiple GPUs and nodes to serve large models efficiently. This guide covers tensor parallelism (TP), pipeline parallelism (PP), and data parallelism (DP) strategies.
+
+## Parallelism strategies
+
+| Strategy | Use case | Pros | Cons |
+|----------|----------|------|------|
+| **Tensor Parallelism (TP)** | Large models that don't fit on single GPU | Low latency, simple setup | Limited by inter-GPU bandwidth |
+| **Pipeline Parallelism (PP)** | Very large models across nodes | Better multi-node scaling | Higher latency due to pipeline bubbles |
+| **Data Parallelism (DP)** | High throughput serving | Linear throughput scaling | Multiplies memory requirements |
+
+<Note>
+These strategies can be combined. For example: DP=4 × TP=2 uses 8 GPUs total with 4 data parallel replicas, each using 2 GPUs for tensor parallelism.
+</Note>
+
+## Tensor parallelism
+
+Tensor parallelism splits model layers across multiple GPUs on the same node.
+
+### Single node TP
+
+```bash
+vllm serve meta-llama/Llama-70B-Instruct \
+  --tensor-parallel-size 4
+```
+
+This distributes the 70B model across 4 GPUs on a single node.
+
+**How it works:**
+- Each layer's weight matrices are split across GPUs
+- All GPUs process the same batch simultaneously
+- GPUs communicate via NVLink/PCIe for synchronization
+- Single endpoint serves all requests
+
+### Multi-node TP
+
+For very large models requiring more than 8 GPUs:
+
+```bash
+vllm serve meta-llama/Llama-405B-Instruct \
+  --tensor-parallel-size 16 \
+  --pipeline-parallel-size 1
+```
+
+<Warning>
+Multi-node TP requires high-bandwidth networking (InfiniBand recommended). For standard Ethernet, prefer pipeline parallelism instead.
+</Warning>
+
+### Configuration tips
+
+<Tabs>
+  <Tab title="Memory optimization">
+    ```bash
+    vllm serve meta-llama/Llama-70B-Instruct \
+      --tensor-parallel-size 4 \
+      --gpu-memory-utilization 0.95 \
+      --max-model-len 8192
+    ```
+  </Tab>
+  <Tab title="With quantization">
+    ```bash
+    vllm serve meta-llama/Llama-70B-Instruct \
+      --tensor-parallel-size 2 \
+      --quantization awq \
+      --dtype half
+    ```
+  </Tab>
+  <Tab title="Performance tuning">
+    ```bash
+    vllm serve meta-llama/Llama-70B-Instruct \
+      --tensor-parallel-size 4 \
+      --enable-prefix-caching \
+      --max-num-batched-tokens 16384
+    ```
+  </Tab>
+</Tabs>
+
+## Pipeline parallelism
+
+Pipeline parallelism splits model layers sequentially across GPUs or nodes.
+
+### Basic PP setup
+
+```bash
+vllm serve meta-llama/Llama-70B-Instruct \
+  --pipeline-parallel-size 4 \
+  --tensor-parallel-size 1
+```
+
+**How it works:**
+- Model layers are divided into 4 stages
+- Each stage runs on a separate GPU
+- Requests flow through stages sequentially
+- Good for multi-node deployments with standard networking
+
+### Combined TP + PP
+
+For maximum flexibility, combine both strategies:
+
+```bash
+vllm serve meta-llama/Llama-405B-Instruct \
+  --tensor-parallel-size 4 \
+  --pipeline-parallel-size 4
+```
+
+This uses 16 GPUs total:
+- 4 pipeline stages
+- Each stage uses 4 GPUs with tensor parallelism
+
+<Note>
+With TP + PP, the total GPU count = `tensor_parallel_size × pipeline_parallel_size`
+</Note>
+
+## Data parallelism
+
+Data parallelism replicates the model across multiple GPUs/nodes to process different requests in parallel.
+
+### Internal load balancing
+
+Single endpoint with automatic load balancing:
+
+<Steps>
+  <Step title="Single node DP">
+    ```bash
+    vllm serve meta-llama/Llama-3.2-1B-Instruct \
+      --data-parallel-size 4
+    ```
+    
+    Creates 4 independent model replicas on 4 GPUs.
+  </Step>
+  
+  <Step title="DP + TP combined">
+    ```bash
+    vllm serve meta-llama/Llama-70B-Instruct \
+      --data-parallel-size 4 \
+      --tensor-parallel-size 2
+    ```
+    
+    Uses 8 GPUs: 4 replicas, each using 2 GPUs with TP.
+  </Step>
+  
+  <Step title="Multi-node DP">
+    Run on head node (IP: 10.99.48.128):
+    
+    ```bash
+    vllm serve meta-llama/Llama-3.2-1B-Instruct \
+      --data-parallel-size 4 \
+      --data-parallel-size-local 2 \
+      --data-parallel-address 10.99.48.128 \
+      --data-parallel-rpc-port 13345
+    ```
+    
+    Run on worker node:
+    
+    ```bash
+    vllm serve meta-llama/Llama-3.2-1B-Instruct \
+      --headless \
+      --data-parallel-size 4 \
+      --data-parallel-size-local 2 \
+      --data-parallel-start-rank 2 \
+      --data-parallel-address 10.99.48.128 \
+      --data-parallel-rpc-port 13345
+    ```
+    
+    Creates 4 replicas across 2 nodes (2 per node).
+  </Step>
+</Steps>
+
+### External load balancing
+
+For production deployments with external load balancers:
+
+```bash
+# Rank 0
+CUDA_VISIBLE_DEVICES=0 vllm serve meta-llama/Llama-3.2-1B-Instruct \
+  --data-parallel-size 2 \
+  --data-parallel-rank 0 \
+  --port 8000
+
+# Rank 1
+CUDA_VISIBLE_DEVICES=1 vllm serve meta-llama/Llama-3.2-1B-Instruct \
+  --data-parallel-size 2 \
+  --data-parallel-rank 1 \
+  --port 8001
+```
+
+Each rank exposes its own HTTP endpoint. Use an external load balancer (nginx, Kubernetes Ingress, etc.) to distribute requests.
+
+**Multi-node external LB:**
+
+```bash
+# Rank 0 (Node 0 with IP 10.99.48.128)
+vllm serve meta-llama/Llama-3.2-1B-Instruct \
+  --data-parallel-size 2 \
+  --data-parallel-rank 0 \
+  --data-parallel-address 10.99.48.128 \
+  --data-parallel-rpc-port 13345
+
+# Rank 1 (Node 1)
+vllm serve meta-llama/Llama-3.2-1B-Instruct \
+  --data-parallel-size 2 \
+  --data-parallel-rank 1 \
+  --data-parallel-address 10.99.48.128 \
+  --data-parallel-rpc-port 13345
+```
+
+### Hybrid load balancing
+
+Combine internal and external load balancing:
+
+```bash
+# Node 0
+vllm serve meta-llama/Llama-3.2-1B-Instruct \
+  --data-parallel-hybrid-lb \
+  --data-parallel-size 4 \
+  --data-parallel-size-local 2 \
+  --data-parallel-start-rank 0 \
+  --data-parallel-address 10.99.48.128 \
+  --data-parallel-rpc-port 13345
+
+# Node 1
+vllm serve meta-llama/Llama-3.2-1B-Instruct \
+  --data-parallel-hybrid-lb \
+  --data-parallel-size 4 \
+  --data-parallel-size-local 2 \
+  --data-parallel-start-rank 2 \
+  --data-parallel-address 10.99.48.128 \
+  --data-parallel-rpc-port 13345
+```
+
+Each node has its own API endpoint(s) that load-balance across local DP ranks only.
+
+### Ray Data backend
+
+Use Ray for automatic resource management:
+
+```bash
+vllm serve meta-llama/Llama-3.2-1B-Instruct \
+  --data-parallel-size 4 \
+  --data-parallel-backend=ray
+```
+
+**Benefits:**
+- Single launch command for multi-node deployments
+- Automatic resource allocation
+- No need to specify addresses/ports manually
+- Built-in fault tolerance
+
+<Note>
+Set `VLLM_RAY_DP_PACK_STRATEGY="span"` when a single replica requires multiple nodes.
+</Note>
+
+## Scaling API servers
+
+For high-throughput deployments, scale out API server processes:
+
+```bash
+vllm serve meta-llama/Llama-3.2-1B-Instruct \
+  --data-parallel-size 8 \
+  --api-server-count 4
+```
+
+This creates:
+- 8 data parallel engine processes
+- 4 API server processes (all on head node)
+- Single HTTP endpoint with load balancing
+
+**How it works:**
+
+```
+┌─────────────┐
+│   Client    │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────────┐
+│  Load Balancer  │ (Single endpoint)
+└────────┬────────┘
+         │
+    ┌────┴─────┬─────────┬─────────┐
+    ▼          ▼         ▼         ▼
+ ┌────┐    ┌────┐    ┌────┐    ┌────┐
+ │API │    │API │    │API │    │API │ (4 API servers)
+ │ 0  │    │ 1  │    │ 2  │    │ 3  │
+ └─┬──┘    └─┬──┘    └─┬──┘    └─┬──┘
+   │         │         │         │
+   └─────────┼─────────┼─────────┘
+             │         │
+    ┌────────┼─────────┼─────────┬─────────┐
+    ▼        ▼         ▼         ▼         ▼
+ ┌────┐  ┌────┐    ┌────┐    ┌────┐    ┌────┐
+ │DP 0│  │DP 1│    │DP 2│    │DP 3│    │... │ (8 engines)
+ └────┘  └────┘    └────┘    └────┘    └────┘
+```
+
+## MoE models and expert parallelism
+
+For Mixture-of-Experts models like DeepSeek, use expert parallelism:
+
+```bash
+vllm serve deepseek-ai/DeepSeek-V3 \
+  --data-parallel-size 4 \
+  --tensor-parallel-size 2 \
+  --enable-expert-parallel
+```
+
+**Without `--enable-expert-parallel`:**
+- Expert layers use tensor parallelism across DP × TP GPUs
+- All DP ranks must synchronize on every forward pass
+
+**With `--enable-expert-parallel`:**
+- Expert layers use expert parallelism
+- Better load distribution for sparse MoE models
+- See [Expert Parallel Deployment](/serving/distributed-serving#expert-parallelism) for details
+
+## Complete deployment examples
+
+### Small model (7B), high throughput
+
+```bash
+vllm serve meta-llama/Llama-3.2-7B-Instruct \
+  --data-parallel-size 4 \
+  --enable-prefix-caching \
+  --max-num-seqs 256 \
+  --gpu-memory-utilization 0.95
+```
+
+### Large model (70B), single node
+
+```bash
+vllm serve meta-llama/Llama-70B-Instruct \
+  --tensor-parallel-size 8 \
+  --gpu-memory-utilization 0.95 \
+  --max-model-len 8192 \
+  --enable-prefix-caching
+```
+
+### Large model (70B), high throughput
+
+```bash
+vllm serve meta-llama/Llama-70B-Instruct \
+  --data-parallel-size 4 \
+  --tensor-parallel-size 4 \
+  --api-server-count 4 \
+  --enable-prefix-caching \
+  --max-num-batched-tokens 16384
+```
+
+Uses 16 GPUs: 4 replicas × 4 GPUs each
+
+### Very large model (405B), multi-node
+
+```bash
+vllm serve meta-llama/Llama-405B-Instruct \
+  --tensor-parallel-size 8 \
+  --pipeline-parallel-size 4 \
+  --gpu-memory-utilization 0.95 \
+  --max-model-len 4096
+```
+
+Uses 32 GPUs: 4 pipeline stages × 8 GPUs per stage
+
+## Performance considerations
+
+<Tabs>
+  <Tab title="Latency">
+    **Minimize latency:**
+    - Use tensor parallelism over pipeline parallelism
+    - Keep TP within single node (NVLink bandwidth)
+    - Reduce `--max-num-seqs` for lower queue time
+    
+    ```bash
+    vllm serve meta-llama/Llama-70B-Instruct \
+      --tensor-parallel-size 8 \
+      --max-num-seqs 64
+    ```
+  </Tab>
+  <Tab title="Throughput">
+    **Maximize throughput:**
+    - Use data parallelism for horizontal scaling
+    - Enable prefix caching for repeated prompts
+    - Increase batch size limits
+    
+    ```bash
+    vllm serve meta-llama/Llama-3.2-1B-Instruct \
+      --data-parallel-size 8 \
+      --enable-prefix-caching \
+      --max-num-seqs 512 \
+      --max-num-batched-tokens 32768
+    ```
+  </Tab>
+  <Tab title="Memory">
+    **Optimize memory:**
+    - Use quantization (AWQ, GPTQ)
+    - Reduce max sequence length
+    - Lower GPU memory utilization if OOM
+    
+    ```bash
+    vllm serve meta-llama/Llama-70B-Instruct \
+      --tensor-parallel-size 4 \
+      --quantization awq \
+      --max-model-len 4096 \
+      --gpu-memory-utilization 0.85
+    ```
+  </Tab>
+</Tabs>
+
+## Monitoring and debugging
+
+### Check GPU utilization
+
+```bash
+watch -n 1 nvidia-smi
+```
+
+### Enable stats logging
+
+```bash
+vllm serve meta-llama/Llama-3.2-1B-Instruct \
+  --data-parallel-size 4
+```
+
+Check logs for throughput metrics:
+
+```
+INFO: Avg prompt throughput: 1234.5 tokens/s
+INFO: Avg generation throughput: 567.8 tokens/s
+```
+
+### Disable stats logging
+
+For production, reduce log verbosity:
+
+```bash
+vllm serve meta-llama/Llama-3.2-1B-Instruct \
+  --disable-log-stats
+```
+
+## Troubleshooting
+
+<Warning>
+**Common issues:**
+
+1. **NCCL timeout errors**: Increase timeout with `NCCL_TIMEOUT=1800`
+2. **Out of memory**: Reduce `--gpu-memory-utilization` or `--max-model-len`
+3. **Slow multi-node**: Check network bandwidth, consider pipeline parallelism
+4. **Uneven load**: Use external load balancer with health checks
+</Warning>
+
+### Environment variables
+
+```bash
+# NCCL settings for multi-GPU
+export NCCL_TIMEOUT=1800
+export NCCL_DEBUG=INFO
+
+# Worker process method
+export VLLM_WORKER_MULTIPROC_METHOD=spawn
+
+# Ray settings
+export VLLM_RAY_DP_PACK_STRATEGY="span"
+
+vllm serve meta-llama/Llama-3.2-1B-Instruct --data-parallel-size 4
+```
+
+## Additional resources
+
+- [Data Parallel Deployment](/serving/data-parallel)
+- [Expert Parallel Deployment](/serving/distributed-serving#expert-parallelism)
+- [Context Parallel Deployment](/serving/context-parallel)
+- [Distributed Troubleshooting](/serving/distributed-troubleshooting)
+- [Multi-node serving script](https://github.com/vllm-project/vllm/blob/main/examples/multi-node-serving.sh)

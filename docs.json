@@ -1,122 +1,158 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "vLLM",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#0066FF",
+    "light": "#3D8AFF",
+    "dark": "#0052CC"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/vllm-project/vllm"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/vllm-project/vllm",
+      "x": "https://x.com/vllm_project",
+      "slack": "https://slack.vllm.ai"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "installation"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/architecture",
+              "concepts/paged-attention",
+              "concepts/model-execution"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Serving",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "serving/offline-inference",
+              "serving/openai-compatible-server",
+              "serving/cli-usage",
+              "serving/distributed-serving"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Models",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "models/supported-models",
+              "models/generative-models",
+              "models/multimodal-models",
+              "models/pooling-models",
+              "models/quantization"
+            ]
+          },
+          {
+            "group": "Features",
+            "pages": [
+              "features/sampling-params",
+              "features/speculative-decoding",
+              "features/prefix-caching",
+              "features/lora-adapters",
+              "features/tensor-parallelism"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/engine-args",
+              "configuration/serve-args",
+              "configuration/environment-variables",
+              "configuration/optimization"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker",
+              "deployment/kubernetes",
+              "deployment/cloud-providers",
+              "deployment/production-guide"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Python API",
             "pages": [
-              "api-reference/introduction"
+              "api/llm",
+              "api/async-llm-engine",
+              "api/engine-args",
+              "api/sampling-params",
+              "api/pooling-params",
+              "api/outputs"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "REST API",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/rest/completions",
+              "api/rest/chat",
+              "api/rest/embeddings",
+              "api/rest/models"
+            ]
+          },
+          {
+            "group": "CLI Reference",
+            "pages": [
+              "api/cli/serve",
+              "api/cli/chat",
+              "api/cli/complete",
+              "api/cli/benchmark"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Development",
+        "groups": [
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/overview",
+              "contributing/development-setup",
+              "contributing/testing"
+            ]
+          },
+          {
+            "group": "Model Implementation",
+            "pages": [
+              "contributing/adding-models",
+              "contributing/model-registration",
+              "contributing/multimodal-support"
+            ]
+          },
+          {
+            "group": "Design",
+            "pages": [
+              "design/architecture",
+              "design/plugin-system",
+              "design/memory-management"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

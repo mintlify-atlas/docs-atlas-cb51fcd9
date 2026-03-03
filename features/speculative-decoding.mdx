@@ -1,0 +1,300 @@
+---
+title: Speculative decoding
+description: Reduce inference latency with speculative decoding in vLLM
+---
+
+Speculative decoding reduces inter-token latency in memory-bound workloads by using a smaller, faster draft model to predict multiple tokens that are then verified by the target model in parallel.
+
+## How it works
+
+Speculative decoding works by:
+
+1. A fast **draft model** generates multiple candidate tokens
+2. The **target model** verifies all candidates in parallel in a single forward pass
+3. Accepted tokens are kept, rejected tokens are resampled
+4. The process repeats until the sequence is complete
+
+This approach is **lossless** - it produces identical outputs to standard decoding while being faster under the right conditions.
+
+<Note>
+vLLM's speculative decoding is algorithmically lossless and theoretically lossless up to floating-point precision. Minor variations may occur due to hardware numerics or batch size changes affecting numerical stability.
+</Note>
+
+## Speculation methods
+
+vLLM supports multiple speculative decoding methods optimized for different scenarios:
+
+### EAGLE (best latency)
+
+EAGLE (Extrapolation Algorithm for Greater Language-model Efficiency) uses a lightweight auto-regressive model trained to predict next tokens from the target model's hidden states.
+
+```python
+from vllm import LLM, SamplingParams
+
+llm = LLM(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    speculative_config={
+        "method": "eagle",
+        "model": "yuhuili/EAGLE-LLaMA3.1-Instruct-8B",
+        "num_speculative_tokens": 3,
+    }
+)
+
+sampling_params = SamplingParams(temperature=0.8, max_tokens=256)
+outputs = llm.generate(["Explain machine learning:"], sampling_params)
+```
+
+**Characteristics:**
+- Best latency reduction (typically 2-3x speedup)
+- Requires trained EAGLE model for your target model
+- Higher memory overhead during peak traffic
+
+For EAGLE models, see [vllm-project/speculators](https://github.com/vllm-project/speculators).
+
+### Draft model
+
+Use a smaller model of the same architecture as the draft model.
+
+```python
+llm = LLM(
+    model="meta-llama/Llama-3.1-70B-Instruct",
+    speculative_config={
+        "method": "draft_model",
+        "model": "meta-llama/Llama-3.1-8B-Instruct",  # Smaller version
+        "num_speculative_tokens": 5,
+    },
+    tensor_parallel_size=4
+)
+```
+
+**Characteristics:**
+- Good latency reduction (1.5-2.5x speedup)
+- No special training required - use any smaller model
+- Works well when draft and target models are from the same family
+
+### MLP speculator
+
+Uses a multi-layer perceptron trained on the target model's embeddings to predict tokens.
+
+```python
+llm = LLM(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    speculative_config={
+        "method": "mlp",
+        "num_speculative_tokens": 3,
+    }
+)
+```
+
+**Characteristics:**
+- Minimal memory overhead
+- Requires trained MLP speculator
+- Good for memory-constrained scenarios
+
+### N-gram (no additional model)
+
+Uses n-gram matching to find repeated patterns in the prompt and predict likely continuations.
+
+```python
+llm = LLM(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    speculative_config={
+        "method": "ngram",
+        "num_speculative_tokens": 5,
+        "prompt_lookup_max": 5,
+        "prompt_lookup_min": 2,
+    }
+)
+```
+
+**Characteristics:**
+- No additional model or memory required
+- Modest speedup (1.2-1.5x)
+- Works best with repetitive text
+- Safe to use during peak traffic
+
+### Suffix decoding
+
+Optimized for scenarios where outputs share common suffixes.
+
+```python
+llm = LLM(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    speculative_config={
+        "method": "suffix",
+        "num_speculative_tokens": 4,
+    }
+)
+```
+
+**Characteristics:**
+- Effective for templated outputs
+- No additional model needed
+- Best for structured generation tasks
+
+## Configuration parameters
+
+### Number of speculative tokens
+
+<ParamField path="num_speculative_tokens" type="int" default="varies">
+  How many tokens the draft model generates before verification.
+  
+  - Higher values: more potential speedup but lower acceptance rate
+  - Lower values: higher acceptance rate but less parallelism
+  - Typical range: 3-5 for EAGLE/draft models, 2-3 for MLP
+</ParamField>
+
+### Parallel drafting
+
+<ParamField path="parallel_drafting" type="bool" default="False">
+  Enable parallel token generation in the draft model.
+  
+  - Can improve throughput for certain draft models
+  - May increase memory usage
+</ParamField>
+
+### Disable padded drafter batch
+
+<ParamField path="disable_padded_drafter_batch" type="bool" default="False">
+  Disable padding in draft model batches for potentially better performance.
+</ParamField>
+
+## Complete example
+
+Here's a complete example using speculative decoding with EAGLE:
+
+```python
+from vllm import LLM, SamplingParams
+
+# Initialize with speculative decoding
+llm = LLM(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    tensor_parallel_size=1,
+    gpu_memory_utilization=0.9,
+    speculative_config={
+        "method": "eagle",
+        "model": "yuhuili/EAGLE-LLaMA3.1-Instruct-8B",
+        "num_speculative_tokens": 3,
+    },
+    disable_log_stats=False,  # Enable to see acceptance metrics
+)
+
+# Configure sampling
+sampling_params = SamplingParams(
+    temperature=0.8,
+    top_p=0.95,
+    max_tokens=256,
+)
+
+prompts = [
+    "Explain quantum computing in simple terms:",
+    "What are the main differences between Python and JavaScript?",
+    "Describe the process of photosynthesis:",
+]
+
+# Generate with speculative decoding
+outputs = llm.generate(prompts, sampling_params)
+
+for i, output in enumerate(outputs):
+    print(f"Prompt {i+1}: {output.prompt}")
+    print(f"Generated: {output.outputs[0].text}")
+    print("-" * 80)
+
+# Check metrics for acceptance rate
+metrics = llm.get_metrics()
+for metric in metrics:
+    if "spec_decode" in metric.name:
+        print(f"{metric.name}: {metric.value}")
+```
+
+## Performance metrics
+
+Monitor these metrics to evaluate speculative decoding effectiveness:
+
+- **Acceptance rate**: Percentage of drafted tokens accepted by the target model
+- **Mean acceptance length**: Average number of tokens accepted per draft
+- **Speedup**: Actual latency reduction achieved
+
+```python
+from vllm.v1.metrics.reader import Counter
+
+metrics = llm.get_metrics()
+num_drafts = 0
+num_accepted = 0
+
+for metric in metrics:
+    if metric.name == "vllm:spec_decode_num_drafts":
+        num_drafts = metric.value
+    elif metric.name == "vllm:spec_decode_num_accepted_tokens":
+        num_accepted = metric.value
+
+acceptance_length = 1 + (num_accepted / num_drafts) if num_drafts > 0 else 1
+print(f"Mean acceptance length: {acceptance_length:.2f}")
+```
+
+## Best practices
+
+### When to use speculative decoding
+
+✅ **Use when:**
+- You have medium-to-low query per second (QPS) workloads
+- Latency is more important than throughput
+- Memory is available for draft model
+- Outputs are relatively short to medium length
+
+❌ **Avoid when:**
+- Running at maximum throughput/capacity
+- Memory is constrained
+- Generating very long sequences (decoding time dominates)
+- Batch sizes are already large
+
+### Method selection guide
+
+- **Lowest latency**: EAGLE or draft model
+- **No memory overhead**: N-gram or suffix decoding
+- **Peak traffic safe**: N-gram, suffix, or MLP
+- **Easiest setup**: N-gram (no additional model needed)
+
+### Tuning acceptance rate
+
+If acceptance rate is low (&lt;40%):
+
+1. Reduce `num_speculative_tokens`
+2. Try a different draft model (if using draft_model method)
+3. Consider whether your workload suits speculative decoding
+
+If acceptance rate is high (>80%):
+
+1. Increase `num_speculative_tokens` for more speedup
+2. Consider using a more aggressive draft model
+
+## Known limitations
+
+<Warning>
+Pipeline parallelism is not compatible with speculative decoding in vLLM &lt;= 0.15.0. Use only tensor parallelism when enabling speculative decoding.
+</Warning>
+
+- Speculative decoding with draft models not supported in vLLM &lt;= 0.10.0
+- `min_p` and `logit_bias` sampling parameters not yet supported with speculative decoding
+- Output variations may occur due to floating-point precision differences
+
+## Lossless guarantees
+
+vLLM's speculative decoding provides three levels of losslessness:
+
+1. **Theoretical**: Lossless up to floating-point precision limits
+2. **Algorithmic**: Rejection sampler validated to match target distribution
+3. **Practical**: Greedy sampling with spec decode matches greedy without it
+
+For mitigation strategies for output variation, see the [FAQ](/usage/faq).
+
+## Training your own speculators
+
+To train custom EAGLE or MLP speculators optimized for your target model, see [vllm-project/speculators](https://github.com/vllm-project/speculators) for training scripts and integration guides.
+
+## Related resources
+
+- [Speculative Decoding paper](https://arxiv.org/pdf/2302.01318) - Original research
+- [Sampling parameters](/features/sampling-params) - Configure generation behavior
+- Source: `docs/features/speculative_decoding/README.md`
+- Example: `examples/offline_inference/spec_decode.py`

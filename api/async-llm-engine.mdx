@@ -1,0 +1,149 @@
+---
+title: AsyncLLMEngine
+description: Python API reference for the vLLM AsyncLLMEngine class for online serving
+---
+
+The `AsyncLLMEngine` class provides an asynchronous interface for serving LLM requests. It's designed for online serving scenarios and is used by the OpenAI-compatible API server.
+
+<Note>
+In vLLM v1, `AsyncLLMEngine` is an alias for `vllm.v1.engine.async_llm.AsyncLLM`.
+</Note>
+
+## Overview
+
+The `AsyncLLMEngine` is the recommended interface for production serving workloads. It provides:
+
+- Asynchronous request processing
+- Request queuing and batching
+- Streaming support
+- Efficient memory management
+- Support for distributed inference
+
+## Usage
+
+```python
+from vllm.engine.async_llm_engine import AsyncLLMEngine
+from vllm.engine.arg_utils import AsyncEngineArgs
+from vllm.sampling_params import SamplingParams
+
+# Create engine args
+engine_args = AsyncEngineArgs(
+    model="facebook/opt-125m",
+    tensor_parallel_size=1,
+)
+
+# Create engine
+engine = AsyncLLMEngine.from_engine_args(engine_args)
+
+# Generate text
+sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
+request_id = "unique-request-id"
+
+# Add request
+await engine.add_request(
+    request_id=request_id,
+    prompt="Hello, my name is",
+    sampling_params=sampling_params,
+)
+
+# Process results
+async for request_output in engine.generate(request_id):
+    if request_output.finished:
+        print(request_output.outputs[0].text)
+```
+
+## Key methods
+
+### from_engine_args
+
+```python
+AsyncLLMEngine.from_engine_args(
+    engine_args: AsyncEngineArgs,
+    usage_context: UsageContext = UsageContext.ENGINE_CONTEXT,
+) -> AsyncLLMEngine
+```
+
+Creates an AsyncLLMEngine from engine arguments.
+
+### add_request
+
+```python
+await engine.add_request(
+    request_id: str,
+    prompt: str | list[int],
+    sampling_params: SamplingParams,
+    arrival_time: float | None = None,
+) -> None
+```
+
+Adds a new request to the engine's queue.
+
+### generate
+
+```python
+async for output in engine.generate(request_id: str):
+    # Process output
+    ...
+```
+
+Generates outputs for a request. Yields `RequestOutput` objects as they become available.
+
+### abort_request
+
+```python
+await engine.abort_request(request_id: str) -> None
+```
+
+Aborts an ongoing request.
+
+## Engine configuration
+
+The `AsyncEngineArgs` class is used to configure the engine. See [EngineArgs](/api/engine-args) for all available configuration options.
+
+## Streaming support
+
+The AsyncLLMEngine supports streaming outputs by yielding partial results as they're generated:
+
+```python
+async for request_output in engine.generate(request_id):
+    # request_output contains partial results
+    if not request_output.finished:
+        print(f"Partial: {request_output.outputs[0].text}")
+    else:
+        print(f"Final: {request_output.outputs[0].text}")
+```
+
+## Integration with FastAPI
+
+The AsyncLLMEngine integrates seamlessly with FastAPI for building API servers:
+
+```python
+from fastapi import FastAPI
+from vllm.engine.async_llm_engine import AsyncLLMEngine
+
+app = FastAPI()
+engine = None
+
+@app.on_event("startup")
+async def startup():
+    global engine
+    engine_args = AsyncEngineArgs(model="facebook/opt-125m")
+    engine = AsyncLLMEngine.from_engine_args(engine_args)
+
+@app.post("/generate")
+async def generate(prompt: str):
+    request_id = f"req-{time.time()}"
+    sampling_params = SamplingParams()
+    
+    await engine.add_request(request_id, prompt, sampling_params)
+    
+    async for output in engine.generate(request_id):
+        if output.finished:
+            return {"text": output.outputs[0].text}
+```
+
+## Related
+
+- [LLM](/api/llm) - Synchronous interface for offline inference
+- [EngineArgs](/api/engine-args) - Engine configuration options
+- [SamplingParams](/api/sampling-params) - Text generation parameters

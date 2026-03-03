@@ -1,0 +1,210 @@
+---
+title: vllm chat
+description: Interactive chat interface via API server
+---
+
+The `vllm chat` command provides an interactive chat interface that connects to a running vLLM API server.
+
+## Basic usage
+
+```bash
+vllm chat [OPTIONS]
+```
+
+## Prerequisites
+
+Before using `vllm chat`, you need a running vLLM server:
+
+```bash
+# In terminal 1
+vllm serve meta-llama/Llama-2-7b-chat-hf
+
+# In terminal 2
+vllm chat
+```
+
+## Examples
+
+### Basic interactive chat
+
+```bash
+vllm chat
+```
+
+Starts an interactive session:
+
+```
+Using model: meta-llama/Llama-2-7b-chat-hf
+Please enter a message for the chat model:
+> Hello! How are you?
+[Assistant response]
+> What is the capital of France?
+[Assistant response]
+```
+
+### Quick single message
+
+```bash
+vllm chat --quick "What is the capital of France?"
+```
+
+Sends a single message and exits:
+
+```
+Using model: meta-llama/Llama-2-7b-chat-hf
+The capital of France is Paris.
+```
+
+### Connect to custom server
+
+```bash
+vllm chat --url http://192.168.1.100:8080/v1
+```
+
+### Specify model name
+
+```bash
+vllm chat --model-name gpt-3.5-turbo
+```
+
+### With system prompt
+
+```bash
+vllm chat --system-prompt "You are a helpful Python programming assistant."
+```
+
+The system prompt is added to the beginning of the conversation:
+
+```
+Using model: meta-llama/Llama-2-7b-chat-hf
+Please enter a message for the chat model:
+> How do I read a file in Python?
+[Assistant provides Python-focused response]
+```
+
+### With API key
+
+```bash
+vllm chat --api-key your-secret-key
+```
+
+## Options
+
+<ParamField path="--url" type="string" default="http://localhost:8000/v1">
+  URL of the running OpenAI-compatible API server.
+</ParamField>
+
+<ParamField path="--model-name" type="string">
+  The model name to use. If not specified, uses the first available model from the server.
+</ParamField>
+
+<ParamField path="--system-prompt" type="string">
+  System prompt to add at the beginning of the conversation.
+</ParamField>
+
+<ParamField path="--quick" type="string">
+  Send a single message and exit. Alias: `-q`.
+</ParamField>
+
+<ParamField path="--api-key" type="string">
+  API key for authentication. Can also use `OPENAI_API_KEY` environment variable.
+</ParamField>
+
+## Interactive controls
+
+During an interactive chat session:
+
+- **Enter**: Send message
+- **Ctrl+C** or **Ctrl+Z**: Exit chat
+- **Ctrl+D** (EOF): Exit chat
+
+## Advanced usage
+
+### Multi-turn conversation with context
+
+The chat command maintains conversation history:
+
+```
+> What is 2+2?
+The answer is 4.
+> What about that number multiplied by 3?
+That would be 12 (4 * 3 = 12).
+```
+
+### Code assistant
+
+```bash
+vllm chat \
+  --system-prompt "You are an expert software engineer. Provide concise, working code examples." \
+  --model-name codellama/CodeLlama-13b-Instruct-hf
+```
+
+### Quick lookups
+
+```bash
+# Quick fact check
+vllm chat -q "What is the tallest mountain in the world?"
+
+# Quick code snippet
+vllm chat -q "Write a Python function to reverse a string"
+
+# Quick translation
+vllm chat -q "Translate 'Hello, how are you?' to Spanish"
+```
+
+## Example workflows
+
+### Research assistant
+
+```bash
+vllm serve mistralai/Mixtral-8x7B-Instruct-v0.1 --tensor-parallel-size 4
+```
+
+Then in another terminal:
+
+```bash
+vllm chat --system-prompt "You are a research assistant. Provide detailed, well-researched answers with sources when possible."
+```
+
+### Creative writing
+
+```bash
+vllm chat --system-prompt "You are a creative writing assistant. Help the user with story ideas, character development, and writing techniques."
+```
+
+```
+> I want to write a sci-fi story about time travel. Give me some unique plot ideas.
+[Assistant provides creative suggestions]
+> I like the second idea. Help me develop the main character.
+[Continues conversation]
+```
+
+### Language learning
+
+```bash
+vllm chat --system-prompt "You are a Spanish language tutor. Respond in Spanish and English, correcting any mistakes I make."
+```
+
+## Environment variables
+
+<ParamField path="OPENAI_API_KEY" type="string">
+  API key for authentication. Used if `--api-key` is not provided.
+</ParamField>
+
+## Comparison with `vllm complete`
+
+Use `vllm chat` for:
+- Multi-turn conversations
+- Chat models (Llama-2-chat, Mistral-Instruct, etc.)
+- Interactive assistance
+
+Use `vllm complete` for:
+- Single-shot text completion
+- Base models
+- Programmatic text generation
+
+## Related
+
+- [vllm complete](/api/cli/complete) - Text completion interface
+- [vllm serve](/api/cli/serve) - Start the API server
+- [Chat completions API](/api/rest/chat) - REST API equivalent

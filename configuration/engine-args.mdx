@@ -1,0 +1,299 @@
+---
+title: Engine configuration arguments
+description: Complete reference for vLLM engine arguments used in offline inference and online serving
+---
+
+Engine arguments control the behavior of the vLLM engine. These arguments are used in:
+
+- **Offline inference**: Arguments to the `LLM` class
+- **Online serving**: Arguments to `vllm serve` command
+
+The engine argument classes (`EngineArgs` and `AsyncEngineArgs`) combine multiple configuration classes defined in `vllm.config`. For detailed developer documentation, refer to these configuration classes as they are the source of truth for types, defaults, and docstrings.
+
+<Note>
+Many engine arguments accept JSON strings for complex configuration objects. You can either:
+- Pass a valid JSON string: `--compilation-config '{"level": 1}'`
+- Pass JSON keys individually when the argument parser supports it
+</Note>
+
+## EngineArgs
+
+The `EngineArgs` class contains all configuration options for the vLLM engine. These are organized into logical groups:
+
+### Model configuration
+
+<ParamField path="model" type="str" required>
+  The model name or path from Hugging Face, local directory, or cloud storage (S3, GCS).
+  
+  ```python
+  LLM(model="meta-llama/Llama-3.1-8B-Instruct")
+  ```
+</ParamField>
+
+<ParamField path="tokenizer" type="str" default="None">
+  The tokenizer name or path. If not specified, uses the model path.
+</ParamField>
+
+<ParamField path="tokenizer_mode" type="str" default="auto">
+  The tokenizer mode.
+  
+  - `auto`: Automatically detect tokenizer mode
+  - `slow`: Use slow tokenizer
+  - `mistral`: Use Mistral tokenizer
+</ParamField>
+
+<ParamField path="trust_remote_code" type="bool" default="false">
+  Trust remote code from Hugging Face when loading models.
+  
+  <Warning>
+  Only enable this if you trust the model source, as it can execute arbitrary code.
+  </Warning>
+</ParamField>
+
+<ParamField path="dtype" type="str" default="auto">
+  Data type for model weights and activations.
+  
+  Options: `auto`, `float16`, `bfloat16`, `float32`
+</ParamField>
+
+<ParamField path="max_model_len" type="int" default="None">
+  Maximum sequence length supported by the model. If not specified, derived from model config.
+  
+  Supports human-readable formats: `4k`, `8K`, `16384`
+</ParamField>
+
+<ParamField path="quantization" type="str" default="None">
+  Quantization method to use.
+  
+  Supported methods: `awq`, `squeezellm`, `gptq`, `fp8`, `compressed-tensors`, `bitsandbytes`, `gguf`
+</ParamField>
+
+<ParamField path="seed" type="int" default="0">
+  Random seed for reproducibility.
+</ParamField>
+
+<ParamField path="revision" type="str" default="None">
+  The specific model version to use (branch name, tag name, or commit ID).
+</ParamField>
+
+<ParamField path="tokenizer_revision" type="str" default="None">
+  The specific tokenizer version to use.
+</ParamField>
+
+<ParamField path="enforce_eager" type="bool" default="false">
+  Always use eager mode (disable CUDA graphs).
+</ParamField>
+
+### Parallel configuration
+
+<ParamField path="tensor_parallel_size" type="int" default="1">
+  Number of tensor parallel replicas. Shards model parameters across GPUs.
+  
+  ```bash
+  vllm serve meta-llama/Llama-3.3-70B-Instruct --tensor-parallel-size 4
+  ```
+</ParamField>
+
+<ParamField path="pipeline_parallel_size" type="int" default="1">
+  Number of pipeline parallel stages. Distributes model layers across GPUs.
+</ParamField>
+
+<ParamField path="data_parallel_size" type="int" default="1">
+  Number of data parallel replicas. Replicates the entire model.
+</ParamField>
+
+<ParamField path="distributed_executor_backend" type="str" default="None">
+  Backend for distributed execution.
+  
+  Options: `ray`, `mp` (multiprocessing)
+</ParamField>
+
+<ParamField path="enable_expert_parallel" type="bool" default="false">
+  Enable expert parallelism for MoE models instead of tensor parallelism for MoE layers.
+</ParamField>
+
+### Cache configuration
+
+<ParamField path="block_size" type="int" default="16">
+  Token block size for contiguous chunks in KV cache.
+</ParamField>
+
+<ParamField path="gpu_memory_utilization" type="float" default="0.9">
+  Fraction of GPU memory to use for KV cache (0.0 to 1.0).
+  
+  <Note>
+  Increase this if you have memory headroom. Decrease if you encounter OOM errors.
+  </Note>
+</ParamField>
+
+<ParamField path="swap_space" type="float" default="4.0">
+  CPU swap space size in GiB per GPU.
+</ParamField>
+
+<ParamField path="kv_cache_dtype" type="str" default="auto">
+  Data type for KV cache storage.
+  
+  Options: `auto`, `fp8`, `fp8_e5m2`, `fp8_e4m3`
+</ParamField>
+
+<ParamField path="enable_prefix_caching" type="bool" default="None">
+  Enable automatic prefix caching to reduce redundant computation.
+</ParamField>
+
+### Scheduler configuration
+
+<ParamField path="max_num_batched_tokens" type="int" default="None">
+  Maximum number of tokens to process in a single batch.
+  
+  Supports human-readable formats: `2k`, `8K`, `16384`
+</ParamField>
+
+<ParamField path="max_num_seqs" type="int" default="None">
+  Maximum number of sequences to process in a single batch.
+</ParamField>
+
+<ParamField path="enable_chunked_prefill" type="bool" default="None">
+  Enable chunked prefill to process large prefills in smaller chunks.
+  
+  In V1, this is enabled by default when possible.
+</ParamField>
+
+<ParamField path="scheduling_policy" type="str" default="fcfs">
+  Scheduling policy for request processing.
+  
+  Options: `fcfs` (first-come-first-served)
+</ParamField>
+
+### Load configuration
+
+<ParamField path="load_format" type="str" default="auto">
+  Format to load model weights.
+  
+  Options: `auto`, `pt`, `safetensors`, `npcache`, `dummy`, `tensorizer`, `bitsandbytes`
+</ParamField>
+
+<ParamField path="download_dir" type="str" default="None">
+  Directory to download and cache model weights.
+</ParamField>
+
+### Compilation configuration
+
+<ParamField path="compilation_config" type="CompilationConfig" default="CompilationConfig()">
+  Configuration for model compilation (torch.compile and CUDA graphs).
+  
+  Pass as JSON string:
+  ```bash
+  --compilation-config '{"level": 1, "cudagraph_capture_sizes": [1, 2, 4]}'
+  ```
+</ParamField>
+
+<ParamField path="cudagraph_capture_sizes" type="list[int]" default="None">
+  Batch sizes to capture in CUDA graphs. Overrides compilation_config setting.
+</ParamField>
+
+### Attention configuration
+
+<ParamField path="attention_config" type="AttentionConfig" default="AttentionConfig()">
+  Configuration for attention backend selection.
+  
+  Pass as JSON string or use individual arguments below.
+</ParamField>
+
+<ParamField path="attention_backend" type="str" default="None">
+  Attention backend to use.
+  
+  Options: `FLASH_ATTN`, `XFORMERS`, `FLASHINFER`, `TORCH_SDPA`
+</ParamField>
+
+### LoRA configuration
+
+<ParamField path="enable_lora" type="bool" default="false">
+  Enable LoRA adapter support.
+</ParamField>
+
+<ParamField path="max_loras" type="int" default="1">
+  Maximum number of LoRA adapters to load simultaneously.
+</ParamField>
+
+<ParamField path="max_lora_rank" type="int" default="16">
+  Maximum LoRA rank.
+</ParamField>
+
+### Multi-modal configuration
+
+<ParamField path="limit_mm_per_prompt" type="dict" default="{}">
+  Maximum number of multi-modal items per prompt.
+  
+  Example: `{"image": 4, "video": 1}`
+</ParamField>
+
+<ParamField path="mm_processor_kwargs" type="dict" default="None">
+  Additional keyword arguments for multi-modal processor.
+</ParamField>
+
+### Observability configuration
+
+<ParamField path="otlp_traces_endpoint" type="str" default="None">
+  OpenTelemetry endpoint for sending traces.
+</ParamField>
+
+<ParamField path="disable_log_stats" type="bool" default="false">
+  Disable logging of statistics.
+</ParamField>
+
+### Speculative decoding
+
+<ParamField path="speculative_config" type="dict" default="None">
+  Configuration for speculative decoding.
+  
+  Pass as JSON string with draft model and other settings.
+</ParamField>
+
+## AsyncEngineArgs
+
+The `AsyncEngineArgs` class extends `EngineArgs` with additional arguments specific to asynchronous engine operation:
+
+<ParamField path="enable_log_requests" type="bool" default="false">
+  Enable logging of request information.
+  
+  - **INFO level**: Logs request ID, parameters, and LoRA request
+  - **DEBUG level**: Logs prompt inputs (text, token IDs)
+  
+  Set minimum log level via `VLLM_LOGGING_LEVEL` environment variable.
+</ParamField>
+
+## Usage examples
+
+### Offline inference
+
+```python
+from vllm import LLM, SamplingParams
+
+llm = LLM(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    tensor_parallel_size=2,
+    gpu_memory_utilization=0.95,
+    max_model_len=8192,
+    enable_prefix_caching=True,
+)
+
+prompts = ["Tell me about AI"]
+sampling_params = SamplingParams(temperature=0.7, top_p=0.9)
+outputs = llm.generate(prompts, sampling_params)
+```
+
+### Online serving
+
+```bash
+vllm serve meta-llama/Llama-3.1-8B-Instruct \
+  --tensor-parallel-size 2 \
+  --gpu-memory-utilization 0.95 \
+  --max-model-len 8192 \
+  --enable-prefix-caching
+```
+
+## See also
+
+- [Server arguments](/configuration/serve-args) - Additional arguments for the OpenAI-compatible API server
+- [Environment variables](/configuration/environment-variables) - Runtime environment variable configuration
+- [Optimization guide](/configuration/optimization) - Performance tuning and optimization strategies

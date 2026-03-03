@@ -1,0 +1,285 @@
+---
+title: vllm serve
+description: Launch an OpenAI-compatible API server
+---
+
+The `vllm serve` command launches a local OpenAI-compatible API server for serving LLM completions via HTTP.
+
+## Basic usage
+
+```bash
+vllm serve MODEL_NAME [OPTIONS]
+```
+
+## Examples
+
+### Serve a model with defaults
+
+```bash
+vllm serve facebook/opt-125m
+```
+
+This starts a server on `http://localhost:8000` with default settings.
+
+### Specify tensor parallelism
+
+```bash
+vllm serve meta-llama/Llama-2-70b-hf \
+  --tensor-parallel-size 4
+```
+
+Distribute the model across 4 GPUs using tensor parallelism.
+
+### Configure memory and context length
+
+```bash
+vllm serve mistralai/Mistral-7B-v0.1 \
+  --gpu-memory-utilization 0.95 \
+  --max-model-len 8192
+```
+
+### Enable prefix caching
+
+```bash
+vllm serve meta-llama/Llama-2-7b-hf \
+  --enable-prefix-caching
+```
+
+### Serve with quantization
+
+```bash
+vllm serve TheBloke/Llama-2-13B-AWQ \
+  --quantization awq
+```
+
+### Custom host and port
+
+```bash
+vllm serve facebook/opt-125m \
+  --host 0.0.0.0 \
+  --port 8080
+```
+
+## Common options
+
+### Model configuration
+
+<ParamField path="model" type="string" required>
+  The model name or path. First positional argument.
+</ParamField>
+
+<ParamField path="--tokenizer" type="string">
+  Tokenizer name or path. Defaults to model path.
+</ParamField>
+
+<ParamField path="--revision" type="string">
+  Model revision (branch, tag, or commit).
+</ParamField>
+
+<ParamField path="--dtype" type="string" default="auto">
+  Data type: `auto`, `float16`, `bfloat16`, or `float32`.
+</ParamField>
+
+<ParamField path="--quantization" type="string">
+  Quantization method: `awq`, `gptq`, or `fp8`.
+</ParamField>
+
+<ParamField path="--max-model-len" type="integer">
+  Maximum context length.
+</ParamField>
+
+### Server configuration
+
+<ParamField path="--host" type="string" default="0.0.0.0">
+  Host IP address to bind the server.
+</ParamField>
+
+<ParamField path="--port" type="integer" default="8000">
+  Port number for the server.
+</ParamField>
+
+<ParamField path="--ssl-keyfile" type="string">
+  Path to SSL key file for HTTPS.
+</ParamField>
+
+<ParamField path="--ssl-certfile" type="string">
+  Path to SSL certificate file for HTTPS.
+</ParamField>
+
+<ParamField path="--api-key" type="string">
+  API key for authentication. Can also use `VLLM_API_KEY` environment variable.
+</ParamField>
+
+### Parallelism
+
+<ParamField path="--tensor-parallel-size" type="integer" default="1">
+  Number of GPUs for tensor parallelism.
+</ParamField>
+
+<ParamField path="--pipeline-parallel-size" type="integer" default="1">
+  Number of pipeline stages.
+</ParamField>
+
+<ParamField path="--data-parallel-size" type="integer" default="1">
+  Number of data parallel replicas.
+</ParamField>
+
+### Memory management
+
+<ParamField path="--gpu-memory-utilization" type="float" default="0.9">
+  Fraction of GPU memory to use (0.0-1.0).
+</ParamField>
+
+<ParamField path="--swap-space" type="float" default="4">
+  CPU swap space in GiB.
+</ParamField>
+
+<ParamField path="--enable-prefix-caching" type="boolean">
+  Enable prefix caching for common prompts.
+</ParamField>
+
+<ParamField path="--block-size" type="integer" default="16">
+  Token block size for paged attention.
+</ParamField>
+
+### Performance
+
+<ParamField path="--enforce-eager" type="boolean">
+  Disable CUDA graphs (use eager mode).
+</ParamField>
+
+<ParamField path="--max-num-seqs" type="integer">
+  Maximum sequences to process in a batch.
+</ParamField>
+
+<ParamField path="--max-num-batched-tokens" type="integer">
+  Maximum tokens to batch together.
+</ParamField>
+
+<ParamField path="--enable-chunked-prefill" type="boolean">
+  Process long prompts in chunks.
+</ParamField>
+
+### Multi-modal
+
+<ParamField path="--limit-mm-per-prompt" type="object">
+  Maximum multi-modal inputs per prompt.
+</ParamField>
+
+<ParamField path="--mm-processor-kwargs" type="object">
+  Additional kwargs for multi-modal processor.
+</ParamField>
+
+### Advanced
+
+<ParamField path="--trust-remote-code" type="boolean">
+  Trust remote code from HuggingFace.
+</ParamField>
+
+<ParamField path="--enable-lora" type="boolean">
+  Enable LoRA adapter support.
+</ParamField>
+
+<ParamField path="--max-loras" type="integer" default="1">
+  Maximum number of LoRA adapters.
+</ParamField>
+
+<ParamField path="--disable-log-stats" type="boolean">
+  Disable logging statistics.
+</ParamField>
+
+## Advanced examples
+
+### Multi-GPU serving with LoRA
+
+```bash
+vllm serve meta-llama/Llama-2-13b-hf \
+  --tensor-parallel-size 2 \
+  --enable-lora \
+  --max-loras 4 \
+  --max-lora-rank 64
+```
+
+### High-throughput configuration
+
+```bash
+vllm serve meta-llama/Llama-2-7b-hf \
+  --gpu-memory-utilization 0.95 \
+  --max-num-seqs 256 \
+  --enable-prefix-caching \
+  --enable-chunked-prefill
+```
+
+### Vision model serving
+
+```bash
+vllm serve llava-hf/llava-1.5-7b-hf \
+  --trust-remote-code \
+  --limit-mm-per-prompt '{"image": 5}'
+```
+
+### Secure server with authentication
+
+```bash
+vllm serve facebook/opt-125m \
+  --api-key your-secret-key \
+  --ssl-keyfile /path/to/key.pem \
+  --ssl-certfile /path/to/cert.pem
+```
+
+## Environment variables
+
+<ParamField path="VLLM_API_KEY" type="string">
+  API key for authentication (alternative to `--api-key`).
+</ParamField>
+
+<ParamField path="VLLM_HOST" type="string">
+  Server host (alternative to `--host`).
+</ParamField>
+
+<ParamField path="VLLM_PORT" type="integer">
+  Server port (alternative to `--port`).
+</ParamField>
+
+## Accessing the server
+
+Once running, the server provides OpenAI-compatible endpoints:
+
+- `GET /v1/models` - List models
+- `POST /v1/completions` - Text completions
+- `POST /v1/chat/completions` - Chat completions
+- `POST /v1/embeddings` - Generate embeddings
+
+### Test with curl
+
+```bash
+curl http://localhost:8000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "facebook/opt-125m",
+    "prompt": "San Francisco is a",
+    "max_tokens": 50
+  }'
+```
+
+### Use with OpenAI Python client
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="EMPTY",
+)
+
+completion = client.chat.completions.create(
+    model="facebook/opt-125m",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+```
+
+## Related
+
+- [Completions API](/api/rest/completions) - Text completion endpoint
+- [Chat API](/api/rest/chat) - Chat completion endpoint
+- [EngineArgs](/api/engine-args) - All configuration options

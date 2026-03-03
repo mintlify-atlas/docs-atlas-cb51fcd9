@@ -1,0 +1,233 @@
+---
+title: Generative models
+description: Text generation and chat models supported by vLLM
+---
+
+vLLM provides first-class support for generative models, which covers most large language models (LLMs). These models implement text generation through autoregressive sampling of tokens.
+
+## How generative models work
+
+In vLLM, generative models implement the `VllmModelForTextGeneration` interface. Based on the final hidden states of the input, these models output log probabilities of tokens to generate, which are then passed through a Sampler to obtain the final text.
+
+## Configuration
+
+### Model runner
+
+Run a model in generation mode via `--runner generate`.
+
+<Note>
+In most cases, you don't need to set this option as vLLM automatically detects the model runner via `--runner auto`.
+</Note>
+
+## Offline inference
+
+The `LLM` class provides various methods for offline inference.
+
+### Basic generation
+
+The `generate()` method is available to all generative models. It's similar to HuggingFace Transformers' `generate()`, except tokenization and detokenization are performed automatically.
+
+```python
+from vllm import LLM
+
+llm = LLM(model="facebook/opt-125m")
+outputs = llm.generate("Hello, my name is")
+
+for output in outputs:
+    prompt = output.prompt
+    generated_text = output.outputs[0].text
+    print(f"Prompt: {prompt!r}, Generated text: {generated_text!r}")
+```
+
+### Controlling generation
+
+You can control language generation by passing `SamplingParams`. For example, use greedy sampling by setting `temperature=0`:
+
+```python
+from vllm import LLM, SamplingParams
+
+llm = LLM(model="facebook/opt-125m")
+params = SamplingParams(temperature=0)
+outputs = llm.generate("Hello, my name is", params)
+```
+
+<Warning>
+By default, vLLM uses sampling parameters recommended by the model creator from `generation_config.json` in the HuggingFace model repository. To use vLLM's default sampling parameters instead, pass `generation_config="vllm"` when creating the LLM instance.
+</Warning>
+
+### Beam search
+
+The `beam_search()` method implements beam search on top of `generate()`:
+
+```python
+from vllm import LLM
+from vllm.sampling_params import BeamSearchParams
+
+llm = LLM(model="facebook/opt-125m")
+params = BeamSearchParams(beam_width=5, max_tokens=50)
+outputs = llm.beam_search([{"prompt": "Hello, my name is "}], params)
+
+for output in outputs:
+    generated_text = output.sequences[0].text
+    print(f"Generated text: {generated_text!r}")
+```
+
+### Chat interface
+
+The `chat()` method implements chat functionality on top of `generate()`. It accepts input similar to OpenAI Chat Completions API and automatically applies the model's chat template.
+
+```python
+from vllm import LLM
+
+llm = LLM(model="meta-llama/Meta-Llama-3-8B-Instruct")
+conversation = [
+    {
+        "role": "system",
+        "content": "You are a helpful assistant",
+    },
+    {
+        "role": "user",
+        "content": "Hello",
+    },
+    {
+        "role": "assistant",
+        "content": "Hello! How can I assist you today?",
+    },
+    {
+        "role": "user",
+        "content": "Write an essay about the importance of higher education.",
+    },
+]
+outputs = llm.chat(conversation)
+
+for output in outputs:
+    generated_text = output.outputs[0].text
+    print(generated_text)
+```
+
+<Note>
+Only instruction-tuned models have a chat template. Base models may perform poorly as they are not trained to respond to chat conversations.
+</Note>
+
+<Accordion title="Custom chat templates">
+  If the model doesn't have a chat template or you want to specify another one:
+
+  ```python
+  from vllm.entrypoints.chat_utils import load_chat_template
+
+  custom_template = load_chat_template(chat_template="<path_to_template>")
+  outputs = llm.chat(conversation, chat_template=custom_template)
+  ```
+</Accordion>
+
+## Online serving
+
+Our OpenAI-Compatible Server provides endpoints that correspond to the offline APIs:
+
+- **Completions API** - Similar to `LLM.generate()` but only accepts text
+- **Chat API** - Similar to `LLM.chat()`, accepting both text and multi-modal inputs for models with a chat template
+
+See the [OpenAI-Compatible Server](/serving/openai-compatible-server) documentation for details.
+
+## Supported architectures
+
+The following table lists text-only generative model architectures natively supported by vLLM:
+
+<Note>
+For the complete and up-to-date list including example HuggingFace models, LoRA support, and pipeline parallelism status, see the [supported models](/models/supported-models#list-of-text-only-language-models) page.
+</Note>
+
+### Popular architectures
+
+| Architecture | Models | Example |
+|--------------|--------|---------|
+| `LlamaForCausalLM` | Llama 3.1, Llama 3, Llama 2, Yi | `meta-llama/Meta-Llama-3.1-405B-Instruct` |
+| `Qwen2ForCausalLM` | QwQ, Qwen2 | `Qwen/Qwen2-7B-Instruct` |
+| `MistralForCausalLM` | Ministral-3, Mistral, Mistral-Instruct | `mistralai/Mistral-7B-v0.1` |
+| `Gemma2ForCausalLM` | Gemma 2 | `google/gemma-2-9b` |
+| `DeepseekV3ForCausalLM` | DeepSeek-V3 | `deepseek-ai/DeepSeek-V3` |
+| `MixtralForCausalLM` | Mixtral-8x7B | `mistralai/Mixtral-8x7B-v0.1` |
+| `GPT2LMHeadModel` | GPT-2 | `openai-community/gpt2` |
+| `BloomForCausalLM` | BLOOM, BLOOMZ | `bigscience/bloom` |
+| `OPTForCausalLM` | OPT, OPT-IML | `facebook/opt-66b` |
+| `Phi3ForCausalLM` | Phi-4, Phi-3 | `microsoft/Phi-4-mini-instruct` |
+
+### Mixture-of-experts models
+
+vLLM supports various MoE architectures:
+
+- **DeepSeek**: DeepSeek-V2, DeepSeek-V3, DeepSeek-R1
+- **Mixtral**: Mixtral-8x7B, Mixtral-8x22B
+- **Qwen**: Qwen2MoE, Qwen3MoE
+- **DBRX**: DBRX Base and Instruct
+- **Arctic**: Snowflake Arctic
+- **Granite**: Granite MoE variants
+- **GLM**: GLM-4.5, GLM-4.6, GLM-4.7
+
+### State space models
+
+vLLM supports efficient sequence modeling architectures:
+
+- **Mamba**: `MambaForCausalLM` (Mamba, Mamba2)
+- **Jamba**: `JambaForCausalLM` (AI21 Jamba)
+- **Falcon Mamba**: `FalconMambaForCausalLM`
+
+### Specialized architectures
+
+<AccordionGroup>
+  <Accordion title="Code models">
+    - **StarCoder**: `GPTBigCodeForCausalLM`
+    - **Starcoder2**: `Starcoder2ForCausalLM`
+    - **WizardCoder**: Based on StarCoder
+    - **IQuest Coder**: `IQuestCoderForCausalLM`
+  </Accordion>
+
+  <Accordion title="Chinese/multilingual models">
+    - **ChatGLM**: `ChatGLMModel`
+    - **Baichuan**: `BaiChuanForCausalLM`
+    - **InternLM**: `InternLMForCausalLM`, `InternLM2ForCausalLM`, `InternLM3ForCausalLM`
+    - **Qwen**: Multiple generations supported
+    - **Ernie**: `Ernie4_5ForCausalLM`, `Ernie4_5_MoeForCausalLM`
+  </Accordion>
+
+  <Accordion title="Long-context models">
+    - **LongCat-Flash**: `LongcatFlashForCausalLM`
+    - **Kimi-Linear**: `KimiLinearForCausalLM` (48B context)
+  </Accordion>
+
+  <Accordion title="Lightweight models">
+    - **MiniCPM**: `MiniCPMForCausalLM`, `MiniCPM3ForCausalLM`
+    - **SmolLM3**: `SmolLM3ForCausalLM`
+    - **Gemma 3**: `Gemma3ForCausalLM` (1B-27B)
+  </Accordion>
+</AccordionGroup>
+
+## Performance features
+
+vLLM generative models support:
+
+- **PagedAttention** - Efficient memory management for KV cache
+- **Continuous batching** - Dynamic batching of requests
+- **Quantization** - GPTQ, AWQ, INT4/8, FP8 (see [Quantization](/models/quantization))
+- **Tensor parallelism** - Distribute model across GPUs
+- **Pipeline parallelism** - Split model across pipeline stages
+- **LoRA adapters** - Multi-LoRA support for fine-tuned models
+- **Speculative decoding** - Faster generation with draft models
+- **Prefix caching** - Cache common prompt prefixes
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Multimodal models" icon="images" href="/models/multimodal-models">
+    Vision, audio, and video language models
+  </Card>
+  <Card title="Quantization" icon="compress" href="/models/quantization">
+    Reduce model memory with quantization
+  </Card>
+  <Card title="LoRA adapters" icon="layer-group" href="/features/lora-adapters">
+    Serve multiple fine-tuned variants
+  </Card>
+  <Card title="OpenAI API" icon="code" href="/serving/openai-compatible-server">
+    Serve models with OpenAI-compatible API
+  </Card>
+</CardGroup>

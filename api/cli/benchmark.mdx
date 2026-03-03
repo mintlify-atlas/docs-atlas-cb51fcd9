@@ -1,0 +1,266 @@
+---
+title: vllm bench
+description: Benchmark vLLM performance
+---
+
+The `vllm bench` command provides benchmarking utilities to measure vLLM performance across different scenarios.
+
+## Available benchmarks
+
+```bash
+vllm bench [SUBCOMMAND]
+```
+
+### Subcommands
+
+- `throughput` - Measure throughput (tokens/second)
+- `latency` - Measure end-to-end latency
+- `serve` - Benchmark a running server
+- `startup` - Measure engine startup time
+
+## Throughput benchmark
+
+Measures the maximum throughput (tokens per second) that vLLM can achieve.
+
+```bash
+vllm bench throughput [OPTIONS]
+```
+
+### Examples
+
+```bash
+# Basic throughput test
+vllm bench throughput --model facebook/opt-125m
+
+# With specific parameters
+vllm bench throughput \
+  --model meta-llama/Llama-2-7b-hf \
+  --input-len 128 \
+  --output-len 128 \
+  --num-prompts 1000 \
+  --tensor-parallel-size 2
+```
+
+### Common options
+
+<ParamField path="--model" type="string" required>
+  Model name or path to benchmark.
+</ParamField>
+
+<ParamField path="--input-len" type="integer" default="128">
+  Input prompt length in tokens.
+</ParamField>
+
+<ParamField path="--output-len" type="integer" default="128">
+  Output sequence length in tokens.
+</ParamField>
+
+<ParamField path="--num-prompts" type="integer" default="1000">
+  Number of prompts to benchmark.
+</ParamField>
+
+<ParamField path="--tensor-parallel-size" type="integer" default="1">
+  Number of GPUs for tensor parallelism.
+</ParamField>
+
+<ParamField path="--dtype" type="string" default="auto">
+  Data type: `auto`, `float16`, `bfloat16`, or `float32`.
+</ParamField>
+
+## Latency benchmark
+
+Measures end-to-end latency for text generation.
+
+```bash
+vllm bench latency [OPTIONS]
+```
+
+### Examples
+
+```bash
+# Basic latency test
+vllm bench latency --model facebook/opt-125m
+
+# Measure latency with different configurations
+vllm bench latency \
+  --model meta-llama/Llama-2-7b-hf \
+  --input-len 256 \
+  --output-len 256 \
+  --num-prompts 100
+```
+
+### Key metrics
+
+The latency benchmark reports:
+- **First token latency**: Time to generate the first token (TTFT)
+- **Inter-token latency**: Time between subsequent tokens
+- **End-to-end latency**: Total generation time
+- **P50, P90, P95, P99**: Latency percentiles
+
+## Server benchmark
+
+Benchmarks a running vLLM server via HTTP requests.
+
+```bash
+vllm bench serve [OPTIONS]
+```
+
+### Examples
+
+```bash
+# Benchmark local server
+vllm bench serve \
+  --base-url http://localhost:8000 \
+  --num-prompts 100
+
+# Benchmark with specific request rate
+vllm bench serve \
+  --base-url http://localhost:8000 \
+  --request-rate 10 \
+  --num-prompts 500
+```
+
+### Options
+
+<ParamField path="--base-url" type="string" default="http://localhost:8000">
+  Base URL of the vLLM server.
+</ParamField>
+
+<ParamField path="--num-prompts" type="integer" default="100">
+  Number of requests to send.
+</ParamField>
+
+<ParamField path="--request-rate" type="float">
+  Request rate (requests per second). If not specified, sends requests as fast as possible.
+</ParamField>
+
+<ParamField path="--input-len" type="integer" default="128">
+  Input prompt length.
+</ParamField>
+
+<ParamField path="--output-len" type="integer" default="128">
+  Output sequence length.
+</ParamField>
+
+## Startup benchmark
+
+Measures engine initialization and model loading time.
+
+```bash
+vllm bench startup [OPTIONS]
+```
+
+### Example
+
+```bash
+vllm bench startup \
+  --model meta-llama/Llama-2-7b-hf \
+  --tensor-parallel-size 2
+```
+
+This measures:
+- Model loading time
+- Engine initialization time
+- Total startup time
+
+## Understanding results
+
+### Throughput metrics
+
+- **Throughput**: Tokens generated per second across all requests
+- **Request throughput**: Requests completed per second
+
+Higher is better. Throughput scales with:
+- More GPUs (via tensor/pipeline parallelism)
+- Larger batch sizes
+- Shorter sequences
+- More efficient quantization
+
+### Latency metrics
+
+- **TTFT (Time to First Token)**: Critical for interactive use
+- **TPOT (Time Per Output Token)**: Affects streaming responsiveness
+- **Total latency**: End-to-end generation time
+
+Lower is better. Latency affected by:
+- Model size
+- Input/output length
+- Batch size (higher batch = higher latency)
+- Number of GPUs
+
+## Example workflow
+
+### 1. Baseline performance
+
+```bash
+vllm bench throughput \
+  --model meta-llama/Llama-2-7b-hf \
+  --num-prompts 1000
+```
+
+### 2. Scale up with tensor parallelism
+
+```bash
+vllm bench throughput \
+  --model meta-llama/Llama-2-7b-hf \
+  --num-prompts 1000 \
+  --tensor-parallel-size 4
+```
+
+### 3. Test with different sequence lengths
+
+```bash
+vllm bench throughput \
+  --model meta-llama/Llama-2-7b-hf \
+  --input-len 512 \
+  --output-len 512 \
+  --num-prompts 500
+```
+
+### 4. Measure latency characteristics
+
+```bash
+vllm bench latency \
+  --model meta-llama/Llama-2-7b-hf \
+  --num-prompts 100
+```
+
+### 5. Benchmark production server
+
+```bash
+# Start server
+vllm serve meta-llama/Llama-2-7b-hf --tensor-parallel-size 4
+
+# In another terminal, benchmark it
+vllm bench serve \
+  --base-url http://localhost:8000 \
+  --num-prompts 1000 \
+  --request-rate 20
+```
+
+## Optimization tips
+
+Based on benchmark results:
+
+**High throughput needed:**
+- Increase `--max-num-seqs` 
+- Enable `--enable-chunked-prefill`
+- Use `--enable-prefix-caching` for repeated prefixes
+- Increase `--gpu-memory-utilization`
+
+**Low latency needed:**
+- Reduce batch size (lower `--max-num-seqs`)
+- Use tensor parallelism for large models
+- Consider quantization (AWQ, GPTQ)
+- Disable unnecessary features
+
+**Memory constrained:**
+- Reduce `--gpu-memory-utilization`
+- Enable quantization
+- Reduce `--max-model-len`
+- Use CPU offloading if needed
+
+## Related
+
+- [vllm serve](/api/cli/serve) - Start API server
+- [EngineArgs](/api/engine-args) - Configuration options

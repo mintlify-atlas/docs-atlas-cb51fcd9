@@ -1,0 +1,328 @@
+---
+title: Prefix caching
+description: Accelerate inference by reusing KV cache for repeated prompts
+---
+
+Automatic Prefix Caching (APC) dramatically improves throughput and reduces latency by caching and reusing the KV (key-value) cache of prompt prefixes across requests.
+
+## How it works
+
+When you send a request with a prompt, vLLM computes and stores the KV cache for that prompt. If a subsequent request shares the same prefix, vLLM reuses the cached KV values instead of recomputing them.
+
+```python
+from vllm import LLM, SamplingParams
+
+# Enable prefix caching
+llm = LLM(
+    model="meta-llama/Llama-3.2-3B-Instruct",
+    enable_prefix_caching=True
+)
+
+sampling_params = SamplingParams(temperature=0, max_tokens=100)
+
+# First request computes KV cache for the entire prompt
+long_context = """[Long document context here...]"""
+output1 = llm.generate(
+    long_context + "Question: What is the main topic?",
+    sampling_params
+)
+
+# Second request reuses cached KV for the shared prefix (long_context)
+# Only computes KV for the new question
+output2 = llm.generate(
+    long_context + "Question: What are the key points?",
+    sampling_params
+)
+```
+
+The second request is much faster because vLLM only processes the unique suffix ("Question: What are the key points?") instead of the entire prompt.
+
+## Use cases
+
+Prefix caching provides significant performance benefits for specific workloads:
+
+### Long document Q&A
+
+Query the same document repeatedly with different questions:
+
+```python
+from vllm import LLM, SamplingParams
+
+llm = LLM(model="lmsys/longchat-13b-16k", enable_prefix_caching=True)
+sampling_params = SamplingParams(temperature=0, max_tokens=100)
+
+# Load a long document (e.g., technical manual, research paper)
+with open("technical_manual.txt") as f:
+    document = f.read()
+
+questions = [
+    "What are the safety requirements?",
+    "How do I perform maintenance?",
+    "What is the warranty policy?",
+]
+
+# First query: processes entire document
+# Subsequent queries: only process the new question
+for question in questions:
+    prompt = f"{document}\n\nQuestion: {question}\nAnswer:"
+    output = llm.generate(prompt, sampling_params)
+    print(f"Q: {question}")
+    print(f"A: {output[0].outputs[0].text}")
+    print("-" * 80)
+```
+
+**Benefits:**
+- First query: normal processing time
+- Subsequent queries: 5-10x faster (only processes new questions)
+- Higher throughput for document analysis workloads
+
+### Multi-round conversations
+
+Reuse conversation history across chat turns:
+
+```python
+from vllm import LLM, SamplingParams
+
+llm = LLM(model="meta-llama/Llama-3.2-3B-Instruct", enable_prefix_caching=True)
+sampling_params = SamplingParams(temperature=0.8, max_tokens=150)
+
+conversation_history = []
+
+def chat(user_message):
+    # Add user message to history
+    conversation_history.append(f"User: {user_message}")
+    
+    # Build prompt from entire conversation
+    prompt = "\n".join(conversation_history) + "\nAssistant:"
+    
+    # vLLM caches all previous conversation turns
+    output = llm.generate(prompt, sampling_params)
+    assistant_response = output[0].outputs[0].text
+    
+    # Add response to history
+    conversation_history.append(f"Assistant: {assistant_response}")
+    
+    return assistant_response
+
+# Each call reuses cached KV from previous turns
+print(chat("What's the capital of France?"))
+print(chat("What's its population?"))  # Reuses first exchange
+print(chat("Tell me about its history."))  # Reuses all previous turns
+```
+
+**Benefits:**
+- Each turn only processes the new message
+- Conversation gets faster as it grows longer
+- Lower latency for multi-turn applications
+
+### System prompts and templates
+
+Cache lengthy system instructions:
+
+```python
+from vllm import LLM, SamplingParams
+
+llm = LLM(model="meta-llama/Llama-3.2-3B-Instruct", enable_prefix_caching=True)
+sampling_params = SamplingParams(temperature=0.7, max_tokens=200)
+
+# Long system prompt is cached
+SYSTEM_PROMPT = """You are a helpful AI assistant specialized in code review.
+When reviewing code, you should:
+1. Check for potential bugs and errors
+2. Suggest performance improvements
+3. Identify security vulnerabilities
+4. Recommend best practices
+5. Provide clear explanations
+...
+[Many more instructions]
+"""
+
+# Process multiple code snippets
+code_snippets = [
+    "def process(x): return x * 2",
+    "for i in range(len(items)): print(items[i])",
+    "password = input('Enter password: ')",
+]
+
+for code in code_snippets:
+    prompt = f"{SYSTEM_PROMPT}\n\nCode to review:\n{code}\n\nReview:"
+    output = llm.generate(prompt, sampling_params)
+    print(f"Code: {code}")
+    print(f"Review: {output[0].outputs[0].text}")
+    print("-" * 80)
+```
+
+**Benefits:**
+- System prompt processed only once
+- All requests benefit from cached instructions
+- Ideal for applications with fixed templates
+
+## Configuration
+
+Enable prefix caching when initializing the LLM:
+
+<ParamField path="enable_prefix_caching" type="bool" default="False">
+  Enable Automatic Prefix Caching to reuse KV cache across requests.
+</ParamField>
+
+### Offline inference
+
+```python
+from vllm import LLM
+
+llm = LLM(
+    model="meta-llama/Llama-3.2-3B-Instruct",
+    enable_prefix_caching=True,
+    gpu_memory_utilization=0.9,  # May need adjustment for cache
+)
+```
+
+### Online serving
+
+```bash
+vllm serve meta-llama/Llama-3.2-3B-Instruct \
+    --enable-prefix-caching \
+    --gpu-memory-utilization 0.9
+```
+
+### Skip reading prefix cache
+
+For specific requests, you can disable reading from the prefix cache:
+
+```python
+from vllm import SamplingParams
+
+# This request won't read from cache (but will still write to it)
+sampling_params = SamplingParams(
+    temperature=0.8,
+    skip_reading_prefix_cache=True  # Useful for prompt logprobs
+)
+```
+
+<Note>
+The `skip_reading_prefix_cache` parameter is automatically set to `True` when `prompt_logprobs` is requested, since reading from cache would return fewer logprobs than expected.
+</Note>
+
+## Performance characteristics
+
+### When prefix caching helps
+
+✅ **High benefit scenarios:**
+- Repeated queries to the same long documents
+- Multi-turn conversations with growing history
+- Many requests sharing the same system prompt
+- Few-shot prompting with fixed examples
+- Batch processing with common prefixes
+
+### When prefix caching doesn't help
+
+❌ **Limited benefit scenarios:**
+- Every request has a unique prompt
+- Prompts are very short (< 100 tokens)
+- Generation length is very long compared to prompt length
+- Memory is severely constrained
+
+### Impact on metrics
+
+**Prefill latency (time to first token):**
+- First occurrence of a prefix: normal latency
+- Cached prefix: 5-10x reduction in latency
+
+**Decode latency (per-token generation):**
+- No change - prefix caching only affects prefill phase
+
+**Throughput:**
+- Can increase by 2-5x for workloads with high prefix reuse
+- No impact when prefixes don't repeat
+
+**Memory:**
+- Uses additional GPU memory to store cached KV values
+- May need to reduce `gpu_memory_utilization` from default
+
+## Memory management
+
+vLLM automatically manages the prefix cache:
+
+- **Cache size**: Determined by available GPU memory
+- **Eviction**: Least recently used (LRU) prefixes are evicted when memory is full
+- **Granularity**: Caching operates at the block level (default: 16 tokens per block)
+
+```python
+# Monitor cache efficiency
+llm = LLM(
+    model="meta-llama/Llama-3.2-3B-Instruct",
+    enable_prefix_caching=True,
+    gpu_memory_utilization=0.85,  # Leave room for cache
+    disable_log_stats=False,  # Enable logging to see cache stats
+)
+```
+
+Check logs for cache hit rates and memory usage.
+
+## Complete example
+
+Here's a complete example demonstrating prefix caching benefits:
+
+```python
+import time
+from vllm import LLM, SamplingParams
+
+# Example document with markdown table (from vLLM examples)
+LONG_DOCUMENT = """
+You are a helpful assistant. Here is a data table:
+
+| ID | Name | Age | Occupation | Country |
+|----|------|-----|------------|----------|
+| 1  | John | 29  | Engineer   | USA      |
+| 2  | Jane | 34  | Doctor     | Canada   |
+...
+[100+ more rows]
+"""
+
+# Initialize with prefix caching
+llm = LLM(
+    model="lmsys/longchat-13b-16k",
+    enable_prefix_caching=True
+)
+
+sampling_params = SamplingParams(temperature=0, max_tokens=100)
+
+# First query - processes entire document
+start = time.time()
+output1 = llm.generate(
+    LONG_DOCUMENT + "Question: What is John's age? Answer:",
+    sampling_params
+)
+time1 = time.time() - start
+print(f"First query time: {time1:.2f}s")
+print(f"Answer: {output1[0].outputs[0].text}")
+print("-" * 80)
+
+# Second query - reuses cached document, only processes new question
+start = time.time()
+output2 = llm.generate(
+    LONG_DOCUMENT + "Question: What is Jane's occupation? Answer:",
+    sampling_params
+)
+time2 = time.time() - start
+print(f"Second query time: {time2:.2f}s")
+print(f"Answer: {output2[0].outputs[0].text}")
+print(f"Speedup: {time1/time2:.1f}x faster")
+```
+
+## Technical details
+
+For in-depth information about vLLM's prefix caching implementation, including:
+- Block-level caching algorithm
+- Hash-based prefix matching
+- Memory allocation strategies
+- Integration with PagedAttention
+
+See the [Prefix Caching Design Document](/design/memory-management).
+
+## Related resources
+
+- [Sampling parameters](/features/sampling-params) - Control generation behavior
+- [Performance optimization](/usage/performance) - General optimization tips
+- Source: `docs/features/automatic_prefix_caching.md`
+- Example: `examples/offline_inference/automatic_prefix_caching.py`

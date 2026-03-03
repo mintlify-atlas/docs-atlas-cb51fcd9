@@ -1,0 +1,335 @@
+---
+title: Server configuration arguments
+description: Complete reference for vLLM OpenAI-compatible server arguments
+---
+
+The `vllm serve` command launches an OpenAI-compatible API server. These arguments control server behavior, authentication, CORS, SSL, and other HTTP server settings.
+
+<Note>
+Server arguments are separate from [engine arguments](/configuration/engine-args). The server arguments configure the API server wrapper, while engine arguments configure the underlying inference engine.
+</Note>
+
+## Configuration methods
+
+You can configure the server using:
+
+1. **Command line arguments**
+2. **YAML configuration file**
+
+### YAML configuration file
+
+You can load arguments from a YAML config file:
+
+```yaml
+# config.yaml
+model: meta-llama/Llama-3.1-8B-Instruct
+host: "127.0.0.1"
+port: 8000
+tensor-parallel-size: 2
+uvicorn-log-level: "info"
+enable-log-requests: true
+```
+
+Use the config file:
+
+```bash
+vllm serve --config config.yaml
+```
+
+<Note>
+**Precedence order**: command line > config file > defaults
+
+If an argument appears in both command line and config file, the command line value takes precedence.
+</Note>
+
+## Server arguments
+
+### Basic server settings
+
+<ParamField path="host" type="str" default="None">
+  Host IP address to bind the server to.
+  
+  ```bash
+  vllm serve MODEL --host 0.0.0.0
+  ```
+</ParamField>
+
+<ParamField path="port" type="int" default="8000">
+  Port number to run the server on.
+  
+  ```bash
+  vllm serve MODEL --port 8080
+  ```
+</ParamField>
+
+<ParamField path="uds" type="str" default="None">
+  Unix domain socket path. If set, host and port arguments are ignored.
+  
+  ```bash
+  vllm serve MODEL --uds /tmp/vllm.sock
+  ```
+</ParamField>
+
+<ParamField path="uvicorn_log_level" type="str" default="info">
+  Log level for uvicorn server.
+  
+  Options: `critical`, `error`, `warning`, `info`, `debug`, `trace`
+</ParamField>
+
+<ParamField path="disable_uvicorn_access_log" type="bool" default="false">
+  Disable uvicorn access logging.
+</ParamField>
+
+<ParamField path="disable_access_log_for_endpoints" type="str" default="None">
+  Comma-separated list of endpoint paths to exclude from access logs.
+  
+  Useful to reduce log noise from health checks:
+  ```bash
+  --disable-access-log-for-endpoints "/health,/metrics,/ping"
+  ```
+</ParamField>
+
+### Authentication
+
+<ParamField path="api_key" type="list[str]" default="None">
+  API keys required in the request header.
+  
+  ```bash
+  vllm serve MODEL --api-key sk-key1 --api-key sk-key2
+  ```
+  
+  Clients must include the key in requests:
+  ```bash
+  curl -H "Authorization: Bearer sk-key1" http://localhost:8000/v1/completions
+  ```
+</ParamField>
+
+### CORS configuration
+
+<ParamField path="allow_credentials" type="bool" default="false">
+  Allow credentials in CORS requests.
+</ParamField>
+
+<ParamField path="allowed_origins" type="list[str]" default="['*']">
+  Allowed origins for CORS.
+  
+  ```bash
+  --allowed-origins '["https://example.com", "https://app.example.com"]'
+  ```
+</ParamField>
+
+<ParamField path="allowed_methods" type="list[str]" default="['*']">
+  Allowed HTTP methods for CORS.
+</ParamField>
+
+<ParamField path="allowed_headers" type="list[str]" default="['*']">
+  Allowed headers for CORS.
+</ParamField>
+
+### SSL/TLS configuration
+
+<ParamField path="ssl_keyfile" type="str" default="None">
+  Path to SSL key file for HTTPS.
+</ParamField>
+
+<ParamField path="ssl_certfile" type="str" default="None">
+  Path to SSL certificate file for HTTPS.
+</ParamField>
+
+<ParamField path="ssl_ca_certs" type="str" default="None">
+  Path to CA certificates file.
+</ParamField>
+
+<ParamField path="enable_ssl_refresh" type="bool" default="false">
+  Automatically refresh SSL context when certificate files change.
+</ParamField>
+
+<ParamField path="ssl_cert_reqs" type="int" default="0">
+  Whether client certificate is required (see Python ssl module).
+</ParamField>
+
+### Chat template configuration
+
+<ParamField path="chat_template" type="str" default="None">
+  Path to chat template file or template string.
+  
+  ```bash
+  vllm serve MODEL --chat-template /path/to/template.jinja
+  ```
+</ParamField>
+
+<ParamField path="trust_request_chat_template" type="bool" default="false">
+  Trust chat templates provided in requests.
+  
+  <Warning>
+  Only enable if you trust all API clients, as templates can execute arbitrary code.
+  </Warning>
+</ParamField>
+
+<ParamField path="response_role" type="str" default="assistant">
+  The role name to return when `add_generation_prompt=true`.
+</ParamField>
+
+### LoRA configuration
+
+<ParamField path="lora_modules" type="list[LoRAModulePath]" default="None">
+  LoRA modules to load at startup.
+  
+  Old format:
+  ```bash
+  --lora-modules name1=path1 name2=path2
+  ```
+  
+  New JSON format:
+  ```bash
+  --lora-modules '{"name": "adapter1", "path": "/path/to/lora"}'
+  ```
+</ParamField>
+
+### Tool calling
+
+<ParamField path="enable_auto_tool_choice" type="bool" default="false">
+  Enable automatic tool choice for supported models.
+  
+  Requires `--tool-call-parser` to be specified.
+</ParamField>
+
+<ParamField path="tool_call_parser" type="str" default="None">
+  Tool call parser for the model.
+  
+  Built-in parsers: `hermes`, `mistral`, `internlm`, `llama3_json`
+  
+  ```bash
+  vllm serve MODEL --enable-auto-tool-choice --tool-call-parser hermes
+  ```
+</ParamField>
+
+<ParamField path="tool_parser_plugin" type="str" default="">
+  Plugin for custom tool parser.
+</ParamField>
+
+### Logging configuration
+
+<ParamField path="max_log_len" type="int" default="None">
+  Maximum number of prompt characters or prompt ID numbers to print in logs.
+  
+  `None` means unlimited.
+</ParamField>
+
+<ParamField path="enable_log_outputs" type="bool" default="false">
+  Log model outputs (generations).
+  
+  Requires `--enable-log-requests`.
+</ParamField>
+
+<ParamField path="log_error_stack" type="bool" default="false">
+  Log stack trace of error responses.
+</ParamField>
+
+### Advanced server settings
+
+<ParamField path="disable_frontend_multiprocessing" type="bool" default="false">
+  Run the API server in the same process as the model serving engine.
+</ParamField>
+
+<ParamField path="root_path" type="str" default="None">
+  FastAPI root_path when app is behind a path-based routing proxy.
+</ParamField>
+
+<ParamField path="middleware" type="list[str]" default="[]">
+  Additional ASGI middleware to apply.
+  
+  ```bash
+  --middleware my_package.middleware.MyMiddleware
+  ```
+</ParamField>
+
+<ParamField path="enable_request_id_headers" type="bool" default="false">
+  Add X-Request-Id header to responses.
+</ParamField>
+
+<ParamField path="disable_fastapi_docs" type="bool" default="false">
+  Disable FastAPI's OpenAPI schema, Swagger UI, and ReDoc endpoints.
+</ParamField>
+
+<ParamField path="h11_max_incomplete_event_size" type="int" default="4194304">
+  Maximum size (bytes) of incomplete HTTP event for h11 parser.
+  
+  Default: 4 MB. Helps mitigate header abuse.
+</ParamField>
+
+<ParamField path="h11_max_header_count" type="int" default="256">
+  Maximum number of HTTP headers allowed.
+  
+  Helps mitigate header abuse.
+</ParamField>
+
+### Data parallel settings
+
+<ParamField path="headless" type="bool" default="false">
+  Run in headless mode for multi-node data parallelism.
+</ParamField>
+
+<ParamField path="api_server_count" type="int" default="None">
+  Number of API server processes to run.
+  
+  Defaults to `data_parallel_size` if not specified.
+  
+  ```bash
+  vllm serve MODEL --api-server-count 4
+  ```
+</ParamField>
+
+## Usage examples
+
+### Basic server
+
+```bash
+vllm serve meta-llama/Llama-3.1-8B-Instruct \
+  --host 0.0.0.0 \
+  --port 8000
+```
+
+### Server with authentication
+
+```bash
+vllm serve meta-llama/Llama-3.1-8B-Instruct \
+  --api-key sk-secret-key-123
+```
+
+### HTTPS server
+
+```bash
+vllm serve meta-llama/Llama-3.1-8B-Instruct \
+  --ssl-keyfile /path/to/key.pem \
+  --ssl-certfile /path/to/cert.pem
+```
+
+### Server with custom chat template
+
+```bash
+vllm serve meta-llama/Llama-3.1-8B-Instruct \
+  --chat-template /path/to/template.jinja
+```
+
+### Server with tool calling
+
+```bash
+vllm serve NousResearch/Hermes-3-Llama-3.1-8B \
+  --enable-auto-tool-choice \
+  --tool-call-parser hermes
+```
+
+### Multi-API server deployment
+
+```bash
+vllm serve meta-llama/Llama-3.1-8B-Instruct \
+  --api-server-count 4 \
+  --data-parallel-size 2
+```
+
+## See also
+
+- [Engine arguments](/configuration/engine-args) - Configuration for the inference engine
+- [Environment variables](/configuration/environment-variables) - Runtime environment configuration
+- [Optimization guide](/configuration/optimization) - Performance tuning strategies

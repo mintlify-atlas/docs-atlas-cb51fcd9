@@ -1,0 +1,197 @@
+---
+title: Models API
+description: REST API endpoint for listing available models
+---
+
+The models endpoint lists all models currently available on the vLLM server.
+
+## List models
+
+```
+GET /v1/models
+```
+
+Lists all available models.
+
+### Response format
+
+<ResponseField name="object" type="string">
+  Always "list".
+</ResponseField>
+
+<ResponseField name="data" type="array">
+  Array of model objects.
+  
+  <ResponseField name="id" type="string">
+    The model identifier that can be referenced in API requests.
+  </ResponseField>
+  
+  <ResponseField name="object" type="string">
+    Always "model".
+  </ResponseField>
+  
+  <ResponseField name="created" type="integer">
+    Unix timestamp of when the model was loaded.
+  </ResponseField>
+  
+  <ResponseField name="owned_by" type="string">
+    Organization that owns the model (typically "vllm").
+  </ResponseField>
+  
+  <ResponseField name="root" type="string">
+    The base model identifier.
+  </ResponseField>
+  
+  <ResponseField name="parent" type="string | null">
+    Parent model, if any.
+  </ResponseField>
+</ResponseField>
+
+### Example
+
+```bash
+curl http://localhost:8000/v1/models
+```
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "facebook/opt-125m",
+      "object": "model",
+      "created": 1677610602,
+      "owned_by": "vllm",
+      "root": "facebook/opt-125m",
+      "parent": null
+    }
+  ]
+}
+```
+
+## Retrieve model
+
+```
+GET /v1/models/{model}
+```
+
+Retrieves information about a specific model.
+
+### Path parameters
+
+<ParamField path="model" type="string" required>
+  The model ID to retrieve.
+</ParamField>
+
+### Response format
+
+<ResponseField name="id" type="string">
+  The model identifier.
+</ResponseField>
+
+<ResponseField name="object" type="string">
+  Always "model".
+</ResponseField>
+
+<ResponseField name="created" type="integer">
+  Unix timestamp of when the model was loaded.
+</ResponseField>
+
+<ResponseField name="owned_by" type="string">
+  Organization that owns the model.
+</ResponseField>
+
+### Example
+
+```bash
+curl http://localhost:8000/v1/models/facebook/opt-125m
+```
+
+```json
+{
+  "id": "facebook/opt-125m",
+  "object": "model",
+  "created": 1677610602,
+  "owned_by": "vllm"
+}
+```
+
+## Using with Python
+
+```python
+import requests
+
+# List all models
+response = requests.get("http://localhost:8000/v1/models")
+models = response.json()["data"]
+
+for model in models:
+    print(f"Model: {model['id']}")
+
+# Get specific model
+model_id = "facebook/opt-125m"
+response = requests.get(f"http://localhost:8000/v1/models/{model_id}")
+model_info = response.json()
+print(model_info)
+```
+
+## Using with OpenAI Python client
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="EMPTY",
+)
+
+# List models
+models = client.models.list()
+for model in models.data:
+    print(model.id)
+
+# Retrieve model
+model = client.models.retrieve("facebook/opt-125m")
+print(model)
+```
+
+## Multiple model serving
+
+To serve multiple models from the same vLLM instance, use the `--served-model-name` flag:
+
+```bash
+vllm serve facebook/opt-125m \
+  --served-model-name opt-125m gpt-125m
+```
+
+This makes the model available under multiple names:
+
+```bash
+curl http://localhost:8000/v1/models
+```
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "opt-125m",
+      "object": "model",
+      "created": 1677610602,
+      "owned_by": "vllm"
+    },
+    {
+      "id": "gpt-125m",
+      "object": "model",
+      "created": 1677610602,
+      "owned_by": "vllm"
+    }
+  ]
+}
+```
+
+## Related
+
+- [Completions endpoint](/api/rest/completions) - Use model for text generation
+- [Chat completions endpoint](/api/rest/chat) - Use model for chat
+- [Embeddings endpoint](/api/rest/embeddings) - Use model for embeddings

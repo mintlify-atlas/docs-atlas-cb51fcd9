@@ -1,0 +1,323 @@
+---
+title: Architecture overview
+description: Understanding vLLM's architecture and core components
+---
+
+This document provides an overview of the vLLM architecture, including its entrypoints, process architecture, and core components.
+
+## Entrypoints
+
+vLLM provides multiple entrypoints for interacting with the system:
+
+### LLM class
+
+The `LLM` class provides the primary Python interface for offline inference (interacting with a model without using a separate inference server).
+
+```python
+from vllm import LLM, SamplingParams
+
+# Define input prompts
+prompts = [
+    "Hello, my name is",
+    "The capital of France is",
+    "The largest ocean is",
+]
+
+# Define sampling parameters
+sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
+
+# Initialize the LLM engine
+llm = LLM(model="facebook/opt-125m")
+
+# Generate outputs
+outputs = llm.generate(prompts, sampling_params)
+
+# Print results
+for output in outputs:
+    prompt = output.prompt
+    generated_text = output.outputs[0].text
+    print(f"Prompt: {prompt!r}, Generated text: {generated_text!r}")
+```
+
+More details: [Offline Inference API](/api/offline-inference)
+
+Code location: `vllm/entrypoints/llm.py`
+
+### OpenAI-compatible API server
+
+The second primary interface is the OpenAI-compatible API server, which can be started using the `vllm serve` command:
+
+```bash
+vllm serve <model>
+```
+
+Code location: `vllm/entrypoints/cli/main.py`
+
+<Warning>
+  The legacy command `python -m vllm.entrypoints.openai.api_server` is deprecated and may become unsupported in a future release.
+</Warning>
+
+More details: [OpenAI-Compatible Server](/serving/openai-compatible-server)
+
+## V1 process architecture
+
+vLLM V1 uses a multi-process architecture to separate concerns and maximize throughput. Understanding this architecture is important for properly sizing CPU resources in your deployment.
+
+### Key processes
+
+<Tabs>
+  <Tab title="API server process">
+    **Purpose**: Handles HTTP requests, performs input processing (tokenization, multi-modal data loading), and streams results back to clients.
+
+    **Communication**: Communicates with engine core process(es) via ZMQ sockets.
+
+    **Count**: 1 API server process by default, but automatically scales to match data parallel size. Can be manually configured with `--api-server-count` flag.
+
+    **Threading**: Each API server uses multiple CPU threads for media loading (controlled by `VLLM_MEDIA_LOADING_THREAD_COUNT`, default 8).
+
+    **Topology**: Many-to-many topology where each API server connects to all engine cores via ZMQ, enabling any API server to route requests to any engine core.
+
+    Code location: `vllm/entrypoints/openai/api_server.py` and `vllm/v1/utils.py`
+  </Tab>
+
+  <Tab title="Engine core process">
+    **Purpose**: Runs the scheduler, manages KV cache, and coordinates model execution across GPU workers.
+
+    **Execution**: Runs a busy loop that continuously schedules requests and dispatches work to GPU workers.
+
+    **Count**: 1 engine core process per data parallel rank (e.g., `--data-parallel-size 4` creates 4 engine core processes).
+
+    Code location: `vllm/v1/engine/core.py` and `vllm/v1/engine/utils.py`
+  </Tab>
+
+  <Tab title="GPU worker processes">
+    **Purpose**: Each GPU is managed by a dedicated worker process that loads model weights, executes forward passes, and manages GPU memory.
+
+    **Communication**: Workers communicate with the engine core process that owns them.
+
+    **Count**: 1 worker process per GPU. Total number equals `tensor_parallel_size x pipeline_parallel_size` per engine core.
+
+    Code location: `vllm/v1/executor/multiproc_executor.py` and `vllm/v1/worker/gpu_worker.py`
+  </Tab>
+
+  <Tab title="DP coordinator process">
+    **Purpose**: When using data parallelism (`--data-parallel-size > 1`), an additional coordinator process manages load balancing across DP ranks and coordinates synchronized forward passes for MoE models.
+
+    **Count**: 1 DP coordinator process (only when data parallelism is enabled).
+
+    Code location: `vllm/v1/engine/coordinator.py`
+  </Tab>
+</Tabs>
+
+### Process count summary
+
+For a deployment with `N` GPUs, `TP` tensor parallel size, `DP` data parallel size, and `A` API server count:
+
+| Process Type | Count | Notes |
+|--------------|-------|-------|
+| API Server | `A` (default `DP`) | Handles HTTP requests and input processing |
+| Engine Core | `DP` (default 1) | Scheduler and KV cache management |
+| GPU Worker | `N` (= `DP x TP`) | One per GPU, executes model forward passes |
+| DP Coordinator | 1 if `DP > 1`, else 0 | Load balancing across DP ranks |
+| **Total** | **`A + DP + N` (+ 1 if DP > 1)** | |
+
+### Example configurations
+
+<Tabs>
+  <Tab title="Single-node (TP=4)">
+    A typical single-node deployment with 4 GPUs:
+
+    ```bash
+    vllm serve -tp=4
+    ```
+
+    **Processes:**
+    - 1 API server
+    - 1 engine core
+    - 4 GPU workers
+    - **Total: 6 processes**
+  </Tab>
+
+  <Tab title="Data parallel (TP=2, DP=4)">
+    A data parallel deployment with 8 GPUs:
+
+    ```bash
+    vllm serve -tp=2 -dp=4
+    ```
+
+    **Processes:**
+    - 4 API servers
+    - 4 engine cores
+    - 8 GPU workers
+    - 1 DP coordinator
+    - **Total: 17 processes**
+  </Tab>
+</Tabs>
+
+For CPU resource sizing recommendations, see [CPU Resources for GPU Deployments](/configuration/optimization#cpu-resources-for-gpu-deployments).
+
+## LLM engine
+
+The `LLMEngine` and `AsyncLLMEngine` classes are central to vLLM's functioning, handling model inference and asynchronous request processing.
+
+### LLMEngine
+
+The `LLMEngine` class is the core component that receives requests from clients and generates outputs from the model.
+
+**Responsibilities:**
+- **Input processing**: Tokenization of input text using the specified tokenizer
+- **Scheduling**: Chooses which requests are processed in each step
+- **Model execution**: Manages distributed execution across multiple GPUs
+- **Output processing**: Decodes token IDs into human-readable text
+
+Code location: `vllm/engine/llm_engine.py`
+
+### AsyncLLMEngine
+
+The `AsyncLLMEngine` class is an asynchronous wrapper for the `LLMEngine` class.
+
+**Features:**
+- Uses `asyncio` to create a background loop for continuous request processing
+- Designed for online serving with multiple concurrent requests
+- Supports streaming outputs to clients
+
+**Usage:**
+- Powers the OpenAI-compatible API server
+- Available in demo API server at `vllm/entrypoints/api_server.py`
+
+Code location: `vllm/engine/async_llm_engine.py`
+
+## Core components
+
+### Worker
+
+A worker is a process that runs model inference. vLLM follows the common practice of using one process to control one accelerator device.
+
+**Example**: With tensor parallelism size 2 and pipeline parallelism size 2, there are 4 workers total.
+
+**Identification**:
+- `rank`: Used for global orchestration
+- `local_rank`: Used for assigning accelerator device and accessing local resources (file system, shared memory)
+
+### Model runner
+
+Every worker has one model runner object responsible for loading and running the model.
+
+**Responsibilities:**
+- Preparing input tensors
+- Capturing CUDA graphs
+- Executing model forward passes
+
+Much of the model execution logic resides in the model runner.
+
+### Model
+
+Every model runner object has one model object, which is the actual `torch.nn.Module` instance.
+
+See [HuggingFace Integration](/design/huggingface-integration) for how various configurations affect the model class.
+
+## Class hierarchy
+
+vLLM's class hierarchy is designed with three key principles:
+
+### 1. Extensibility
+
+All classes accept a configuration object containing all necessary information. The `VllmConfig` class is the main configuration object passed throughout the hierarchy.
+
+**Benefits:**
+- Deep class hierarchy with easy configuration access
+- New features can be added without changing constructor signatures
+- Configuration options only need to be added to `VllmConfig`
+
+### 2. Uniformity
+
+The model runner needs a unified interface to create and initialize models. vLLM supports 50+ model types, each with unique initialization logic.
+
+**All vLLM models now use a uniform constructor signature:**
+
+```python
+def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
+    ...
+```
+
+<Note>
+  The constructor is keyword-only to ensure errors are raised if old configurations are passed. For out-of-tree models, developers need to update their models to use this signature.
+</Note>
+
+**Example shim code for compatibility:**
+
+```python
+from vllm.config import VllmConfig
+from packaging import version
+
+class MyOldModel(nn.Module):
+    def __init__(
+        self,
+        config,
+        cache_config: Optional[CacheConfig] = None,
+        quant_config: Optional[QuantizationConfig] = None,
+        lora_config: Optional[LoRAConfig] = None,
+        prefix: str = "",
+    ) -> None:
+        ...
+
+class MyNewModel(MyOldModel):
+    def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
+        config = vllm_config.model_config.hf_config
+        cache_config = vllm_config.cache_config
+        quant_config = vllm_config.quant_config
+        lora_config = vllm_config.lora_config
+        super().__init__(config, cache_config, quant_config, lora_config, prefix)
+
+if version.parse(__version__) >= version.parse("0.6.4"):
+    MyModel = MyNewModel
+else:
+    MyModel = MyOldModel
+```
+
+### 3. Sharding and quantization at initialization
+
+Certain features require changing model weights during initialization rather than after.
+
+**Why initialize-time modifications?**
+
+Consider running a 405B model (roughly 810GB weights) on 16 H100 80GB GPUs:
+- **After initialization**: Would need to load 810GB to every GPU, then shard (huge memory overhead)
+- **During initialization**: Each layer only creates the shard it needs (50GB per GPU)
+
+**The `prefix` argument:**
+
+The `prefix` parameter enables non-uniform quantization where different parts of the model are quantized differently:
+- Usually an empty string for the top-level model
+- Strings like `"vision"` or `"language"` for sub-models
+- Matches the module's state dict name in the checkpoint file
+
+## Testing implications
+
+One disadvantage of this design is that it's hard to write unit tests for individual components since every component needs a complete config object.
+
+**Solution**: Provide a default initialization function that creates a default config object with all fields set to `None`. For testing a component that only cares about a few fields, create a default config and set only the fields needed.
+
+<Note>
+  Many vLLM tests are end-to-end tests that test the whole system, so this is not a major problem in practice.
+</Note>
+
+## Summary
+
+The complete `VllmConfig` object can be treated as an **engine-level global state** shared among all vLLM classes. This design enables:
+
+- Easy extensibility for new features
+- Uniform interfaces across all models
+- Memory-efficient initialization for large models
+- Support for complex features like non-uniform quantization
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Plugin system" icon="puzzle-piece" href="/design/plugin-system">
+    Extend vLLM with custom features
+  </Card>
+  <Card title="Memory management" icon="memory" href="/design/memory-management">
+    Learn about PagedAttention and KV cache
+  </Card>
+</CardGroup>

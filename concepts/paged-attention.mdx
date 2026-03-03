@@ -1,0 +1,359 @@
+---
+title: PagedAttention
+description: Efficient memory management for LLM serving with PagedAttention
+---
+
+PagedAttention is vLLM's core innovation for efficient memory management during LLM inference. It enables high-throughput serving by storing attention keys and values in non-contiguous memory blocks, similar to how operating systems use virtual memory for process management.
+
+<Note>
+PagedAttention is based on the paper ["Efficient Memory Management for Large Language Model Serving with PagedAttention"](https://arxiv.org/abs/2309.06180) by Kwon et al., published at SOSP 2023.
+</Note>
+
+## The memory bottleneck problem
+
+During LLM inference, the KV (key-value) cache is the primary memory bottleneck:
+
+- Each token in a sequence requires storing attention keys and values
+- For a Llama-13B model, storing KV cache for one token requires ~1.5MB
+- A single sequence of 2048 tokens needs ~3GB just for KV cache
+- Traditional implementations allocate contiguous memory, leading to fragmentation
+
+**Without PagedAttention:**
+- Memory must be pre-allocated for the maximum sequence length
+- Internal fragmentation wastes ~60% of memory
+- External fragmentation prevents memory sharing
+- Batch size is severely limited
+
+## How PagedAttention works
+
+PagedAttention divides the KV cache into fixed-size blocks, allowing non-contiguous storage in GPU memory.
+
+### Block-based memory layout
+
+The KV cache is divided into blocks, each storing keys and values for a fixed number of tokens:
+
+- **Block size** - Typically 16 or 32 tokens per block
+- **Block structure** - Each block stores `[block_size, num_heads, head_dim]` for keys and values
+- **Non-contiguous allocation** - Blocks can be stored anywhere in GPU memory
+
+**Location in codebase:** `vllm/v1/core/block_pool.py`, `vllm/v1/core/kv_cache_utils.py:13`
+
+<Tip>
+With a block size of 16, a sequence of 2048 tokens uses 128 blocks, but these blocks don't need to be adjacent in memory.
+</Tip>
+
+### Memory layout structure
+
+The actual KV cache tensors have the following shapes:
+
+```python
+# Key cache layout
+k_cache: [num_blocks, num_kv_heads, head_size/x, block_size, x]
+
+# Value cache layout  
+v_cache: [num_blocks, num_kv_heads, head_size, block_size]
+```
+
+This layout is optimized for:
+- **Memory coalescing** - Neighboring threads read neighboring memory
+- **Efficient access patterns** - Thread groups process data together
+- **CUDA optimization** - Aligned with GPU warp execution
+
+**Location in codebase:** `csrc/attention/attention_kernels.cu`, documented in `docs/design/paged_attention.md:49`
+
+### Block allocation and management
+
+The `KVCacheManager` handles dynamic block allocation:
+
+```python
+class KVCacheManager:
+    def __init__(self, kv_cache_config: KVCacheConfig, max_model_len: int, ...):
+        # Block pool manages available blocks
+        self.block_pool = ...
+        
+        # Coordinator handles allocation/deallocation
+        self.coordinator = get_kv_cache_coordinator(...)
+```
+
+**Allocation flow:**
+
+<Steps>
+
+### Request arrives
+
+Scheduler determines how many tokens need to be generated.
+
+### Calculate block requirements
+
+Compute blocks needed: `ceil((prompt_len + max_new_tokens) / block_size)`
+
+### Allocate blocks
+
+Block pool allocates available blocks (not necessarily contiguous).
+
+### Map logical to physical
+
+Scheduler maintains mapping from logical positions to physical block IDs.
+
+### Execute attention
+
+Custom attention kernel reads KV cache from non-contiguous blocks.
+
+</Steps>
+
+**Location in codebase:** `vllm/v1/core/kv_cache_manager.py:94`, `vllm/v1/core/sched/scheduler.py:63`
+
+## Key benefits
+
+### 1. Near-zero memory waste
+
+PagedAttention reduces memory waste from ~60% to less than 4%:
+
+- **Internal fragmentation** - Only the last block may be partially filled
+- **External fragmentation** - Eliminated through non-contiguous allocation
+- **Over-provisioning** - No need to pre-allocate for max sequence length
+
+### 2. Memory sharing for parallel sampling
+
+Multiple sequences can share prefix blocks:
+
+```python
+# Original prompt
+prompt = "Once upon a time"
+
+# Generate 5 different completions
+sampling_params = SamplingParams(n=5, temperature=0.8)
+
+# All 5 sequences share the prompt blocks!
+# Only divergent tokens need new blocks
+```
+
+This is especially powerful for:
+- Parallel sampling (sampling `n > 1` completions)
+- Beam search
+- Speculative decoding
+
+### 3. Prefix caching
+
+Common prompt prefixes automatically share blocks across different requests:
+
+```python
+# Request 1: "Explain quantum physics"
+# Request 2: "Explain quantum computing"  
+# "Explain quantum" blocks are shared!
+```
+
+**Location in codebase:** `docs/design/memory-management.md`, `vllm/v1/core/kv_cache_coordinator.py`
+
+### 4. Higher throughput
+
+By eliminating memory waste, PagedAttention enables:
+- **Larger batch sizes** - More requests processed simultaneously
+- **Continuous batching** - New requests join ongoing batches
+- **Better GPU utilization** - Less memory waste means more compute
+
+## Implementation details
+
+### Block pool structure
+
+The block pool maintains free and allocated blocks:
+
+```python
+class BlockPool:
+    def allocate_blocks(self, num_blocks: int) -> list[KVCacheBlock]:
+        """Allocate blocks from the free pool."""
+        
+    def free_blocks(self, blocks: list[KVCacheBlock]) -> None:
+        """Return blocks to the free pool."""
+        
+    def get_usage(self) -> float:
+        """Get KV cache usage (0.0 to 1.0)."""
+```
+
+**Location in codebase:** `vllm/v1/core/block_pool.py`
+
+### KVCacheBlocks interface
+
+The scheduler interacts with KV cache through the `KVCacheBlocks` abstraction:
+
+```python
+@dataclass
+class KVCacheBlocks:
+    blocks: tuple[Sequence[KVCacheBlock], ...]
+    
+    def get_block_ids(self) -> tuple[list[int], ...]:
+        """Convert to block IDs for attention kernel."""
+```
+
+This hides the internal structure from the scheduler, allowing flexibility in implementation.
+
+**Location in codebase:** `vllm/v1/core/kv_cache_manager.py:21`
+
+### Attention kernel execution
+
+The custom attention kernel (`paged_attention_kernel`) handles non-contiguous blocks:
+
+**Key concepts:**
+
+- **Thread group** - Small group of threads processing one query and one key token
+- **Warp** - 32 threads processing one query token against all context keys in one block
+- **Thread block** - Multiple warps processing one entire context sequence
+
+**Execution flow:**
+
+1. Load query token into shared memory
+2. Iterate through blocks of key tokens
+3. Compute QK dot products with softmax
+4. Iterate through value blocks
+5. Compute weighted sum and output
+
+**Location in codebase:** `csrc/attention/attention_kernels.cu`, `docs/design/paged_attention.md`
+
+<Warning>
+The design document at `docs/design/paged_attention.md` describes the historical implementation. Modern vLLM also integrates with FlashAttention and FlashInfer for additional optimizations.
+</Warning>
+
+### Hash-based prefix caching
+
+vLLM uses content hashing to identify shared prefixes:
+
+```python
+class KVCacheBlock:
+    block_id: int
+    block_hash: BlockHash | None  # Content hash for prefix caching
+```
+
+Blocks with identical content (same tokens) share the same hash and can be reused across requests.
+
+**Location in codebase:** `vllm/v1/core/kv_cache_utils.py`, `vllm/utils/hashing.py`
+
+## Configuration
+
+### Block size
+
+Block size affects memory efficiency and performance:
+
+```bash
+# Smaller blocks = less internal fragmentation, more overhead
+vllm serve model --block-size 16
+
+# Larger blocks = less overhead, more internal fragmentation  
+vllm serve model --block-size 32
+```
+
+**Default:** 16 tokens per block (good balance for most workloads)
+
+### KV cache configuration
+
+The `KVCacheConfig` controls cache behavior:
+
+```python
+kv_cache_config = KVCacheConfig(
+    kv_cache_groups=[...],  # Cache groups for different attention types
+    num_gpu_blocks=...,     # Total GPU blocks available
+    num_cpu_blocks=...,     # CPU blocks for offloading (if enabled)
+)
+```
+
+**Location in codebase:** `vllm/v1/kv_cache_interface.py`
+
+### Memory profiling
+
+vLLM automatically profiles GPU memory to determine the number of available blocks:
+
+```python
+def _initialize_kv_caches(self, vllm_config):
+    """Profile memory and determine cache size."""
+    # Run dummy forward pass to measure memory usage
+    # Calculate available memory for KV cache
+    # Determine num_gpu_blocks based on block_size
+```
+
+**Location in codebase:** `vllm/v1/engine/core.py:120`
+
+## Performance characteristics
+
+### Memory efficiency
+
+**Compared to naive implementation:**
+- Traditional: ~40% memory utilization (60% waste)
+- PagedAttention: ~96% memory utilization (4% waste)
+
+**Example:** For 1000 concurrent requests:
+- Traditional: Can fit ~160 requests
+- PagedAttention: Can fit ~400 requests (2.5x improvement)
+
+### Throughput improvements
+
+**Measured throughput gains:**
+- 2-4x higher throughput compared to naive implementations
+- Near-linear scaling with batch size (up to memory limits)
+- Enables continuous batching for maximum GPU utilization
+
+## Advanced features
+
+### Hybrid KV cache management
+
+vLLM supports multiple cache types in the same deployment:
+
+- **GPU blocks** - Fast access for active requests
+- **CPU blocks** - Offloading for lower-priority requests  
+- **Hybrid strategies** - Automatic migration between GPU/CPU
+
+**Location in codebase:** `docs/design/hybrid_kv_cache_manager.md`
+
+### KV cache events
+
+For distributed scenarios, vLLM can publish KV cache events:
+
+```python
+class KVCacheEvent:
+    """Event representing KV cache allocation/deallocation."""
+    request_id: str
+    block_ids: list[int]
+    event_type: str  # "allocate" or "free"
+```
+
+**Location in codebase:** `vllm/distributed/kv_events.py`
+
+### Context parallelism integration
+
+PagedAttention works seamlessly with context parallelism:
+
+- Blocks are partitioned across context parallel ranks
+- Each rank manages its subset of blocks
+- Attention computation distributed across ranks
+
+**Location in codebase:** `vllm/v1/core/sched/scheduler.py:149`
+
+## Comparison with alternatives
+
+| Approach | Memory Efficiency | Flexibility | Complexity |
+|----------|------------------|-------------|------------|
+| Contiguous allocation | Low (40%) | Low | Low |
+| PagedAttention | High (96%) | High | Medium |
+| FlashAttention | Medium (80%) | Medium | Low |
+| PagedAttention + Flash | High (96%) | High | Medium |
+
+<Note>
+vLLM integrates both PagedAttention (for memory management) and FlashAttention/FlashInfer (for kernel efficiency) to get the best of both approaches.
+</Note>
+
+## Next steps
+
+- Explore [Model execution](/concepts/model-execution) to understand how requests flow through the system
+- Learn about [Prefix caching](/features/prefix-caching) for advanced memory sharing
+- Review [Performance optimization](/configuration/optimization) for tuning block size and cache settings
+
+## Citation
+
+If you use PagedAttention in your research, please cite:
+
+```bibtex
+@inproceedings{kwon2023efficient,
+  title={Efficient Memory Management for Large Language Model Serving with PagedAttention},
+  author={Woosuk Kwon and Zhuohan Li and Siyuan Zhuang and Ying Sheng and Lianmin Zheng and Cody Hao Yu and Joseph E. Gonzalez and Hao Zhang and Ion Stoica},
+  booktitle={Proceedings of the ACM SIGOPS 29th Symposium on Operating Systems Principles},
+  year={2023}
+}
+```

@@ -1,0 +1,374 @@
+---
+title: Sampling parameters
+description: Control text generation with sampling parameters in vLLM
+---
+
+Sampling parameters control how vLLM generates text from language models. These parameters let you fine-tune the randomness, diversity, and behavior of model outputs.
+
+## Overview
+
+The `SamplingParams` class follows the OpenAI text completion API specification and supports additional features like beam search. All parameters are optional and have sensible defaults.
+
+```python
+from vllm import LLM, SamplingParams
+
+llm = LLM(model="meta-llama/Llama-3.2-3B-Instruct")
+
+sampling_params = SamplingParams(
+    temperature=0.8,
+    top_p=0.95,
+    max_tokens=256
+)
+
+outputs = llm.generate(["Explain quantum computing:"], sampling_params)
+```
+
+## Temperature and randomness
+
+### Temperature
+
+Controls the randomness of sampling. Lower values make output more deterministic, higher values make it more random.
+
+<ParamField path="temperature" type="float" default="1.0">
+  - Set to `0` for greedy sampling (always picks the most likely token)
+  - Values between `0.0` and `1.0` reduce randomness
+  - Values above `1.0` increase randomness
+  - Minimum value: `0.01` (values below this are clamped)
+</ParamField>
+
+```python
+# Deterministic output
+SamplingParams(temperature=0.0)
+
+# Balanced creativity
+SamplingParams(temperature=0.8)
+
+# High creativity
+SamplingParams(temperature=1.2)
+```
+
+<Note>
+When `temperature < 0.01`, vLLM automatically uses greedy sampling and ignores `top_p`, `top_k`, and `min_p`.
+</Note>
+
+### Seed
+
+Random seed for reproducible generation with non-zero temperature.
+
+<ParamField path="seed" type="int | None" default="None">
+  Set to any integer for reproducible sampling. Use `None` for non-deterministic sampling.
+</ParamField>
+
+```python
+# Reproducible random sampling
+SamplingParams(temperature=0.8, seed=42)
+```
+
+## Top-k, top-p, and min-p sampling
+
+These parameters filter which tokens are considered during sampling.
+
+### Top-p (nucleus sampling)
+
+<ParamField path="top_p" type="float" default="1.0">
+  Considers only the smallest set of tokens whose cumulative probability exceeds `top_p`.
+  
+  - Range: `(0.0, 1.0]`
+  - Set to `1.0` to consider all tokens
+  - Lower values (e.g., `0.9`) filter out low-probability tokens
+</ParamField>
+
+### Top-k sampling
+
+<ParamField path="top_k" type="int" default="0">
+  Considers only the top `k` most likely tokens.
+  
+  - Set to `0` or `-1` to disable (consider all tokens)
+  - Higher values allow more diversity
+</ParamField>
+
+### Min-p sampling
+
+<ParamField path="min_p" type="float" default="0.0">
+  Minimum probability threshold relative to the most likely token.
+  
+  - Range: `[0.0, 1.0]`
+  - Set to `0.0` to disable
+  - For example, `0.05` means tokens with probability < 5% of the max are excluded
+</ParamField>
+
+```python
+# Nucleus sampling: only top 90% probability mass
+SamplingParams(temperature=0.8, top_p=0.9)
+
+# Top-k: consider only top 50 tokens
+SamplingParams(temperature=0.8, top_k=50)
+
+# Combine multiple sampling strategies
+SamplingParams(temperature=0.8, top_p=0.95, top_k=50, min_p=0.05)
+```
+
+## Output length control
+
+### Maximum tokens
+
+<ParamField path="max_tokens" type="int | None" default="16">
+  Maximum number of tokens to generate per output sequence.
+  
+  - Must be at least `1`
+  - Set to `None` to generate until EOS token
+</ParamField>
+
+### Minimum tokens
+
+<ParamField path="min_tokens" type="int" default="0">
+  Minimum number of tokens to generate before EOS or stop tokens can be generated.
+  
+  - Must be less than or equal to `max_tokens`
+  - Prevents premature stopping
+</ParamField>
+
+```python
+# Generate between 50 and 256 tokens
+SamplingParams(min_tokens=50, max_tokens=256)
+```
+
+## Repetition penalties
+
+vLLM supports three types of repetition penalties to discourage repeated tokens.
+
+### Presence penalty
+
+<ParamField path="presence_penalty" type="float" default="0.0">
+  Penalizes tokens that have already appeared in the generated text.
+  
+  - Range: `[-2.0, 2.0]`
+  - Positive values encourage new tokens
+  - Negative values encourage repetition
+</ParamField>
+
+### Frequency penalty
+
+<ParamField path="frequency_penalty" type="float" default="0.0">
+  Penalizes tokens based on how often they appear in the generated text.
+  
+  - Range: `[-2.0, 2.0]`
+  - Positive values discourage frequent tokens
+  - Negative values encourage frequent tokens
+</ParamField>
+
+### Repetition penalty
+
+<ParamField path="repetition_penalty" type="float" default="1.0">
+  Penalizes tokens based on whether they appear in both the prompt and generated text.
+  
+  - Must be greater than `0.0`
+  - Values > `1.0` encourage new tokens
+  - Values < `1.0` encourage repetition
+</ParamField>
+
+```python
+# Discourage repetition
+SamplingParams(
+    presence_penalty=0.5,
+    frequency_penalty=0.5,
+    repetition_penalty=1.2
+)
+```
+
+## Stop sequences
+
+### Stop strings
+
+<ParamField path="stop" type="str | list[str] | None" default="None">
+  String(s) that stop generation when encountered. The stop string is not included in the output (unless `include_stop_str_in_output=True`).
+</ParamField>
+
+### Stop token IDs
+
+<ParamField path="stop_token_ids" type="list[int] | None" default="None">
+  Token IDs that stop generation. The stop tokens are included in output unless they are special tokens.
+</ParamField>
+
+### Ignore EOS
+
+<ParamField path="ignore_eos" type="bool" default="False">
+  Whether to ignore the end-of-sequence token and continue generating.
+</ParamField>
+
+```python
+# Stop at custom strings
+SamplingParams(
+    stop=["\n\n", "END"],
+    max_tokens=256
+)
+
+# Stop at specific token IDs
+SamplingParams(stop_token_ids=[128001, 128009])
+```
+
+## Multiple outputs
+
+<ParamField path="n" type="int" default="1">
+  Number of output sequences to generate for each prompt.
+  
+  - Must be at least `1`
+  - Cannot be greater than `1` when using greedy sampling (`temperature=0`)
+</ParamField>
+
+```python
+# Generate 3 different completions
+sampling_params = SamplingParams(
+    temperature=0.8,
+    n=3,
+    max_tokens=100
+)
+
+outputs = llm.generate(["Once upon a time"], sampling_params)
+for i, output in enumerate(outputs[0].outputs):
+    print(f"Output {i+1}: {output.text}")
+```
+
+<Note>
+When using `AsyncLLM`, all `n` outputs are streamed cumulatively. To see all outputs only upon completion, use `output_kind=RequestOutputKind.FINAL_ONLY`.
+</Note>
+
+## Log probabilities
+
+### Sample logprobs
+
+<ParamField path="logprobs" type="int | None" default="None">
+  Number of log probabilities to return per output token.
+  
+  - Set to `None` to disable
+  - Set to `-1` to return all vocabulary logprobs
+  - Returns logprobs for up to `logprobs + 1` tokens (includes sampled token)
+</ParamField>
+
+### Prompt logprobs
+
+<ParamField path="prompt_logprobs" type="int | None" default="None">
+  Number of log probabilities to return per prompt token.
+  
+  - Set to `None` to disable
+  - Set to `-1` to return all vocabulary logprobs
+</ParamField>
+
+```python
+# Return top 5 logprobs for each generated token
+SamplingParams(logprobs=5, max_tokens=50)
+
+# Return logprobs for both prompt and generation
+SamplingParams(logprobs=5, prompt_logprobs=5)
+```
+
+## Advanced features
+
+### Logit bias
+
+<ParamField path="logit_bias" type="dict[int, float] | None" default="None">
+  Apply bias to specific token logits before sampling.
+  
+  - Keys: token IDs
+  - Values: bias values clamped to `[-100.0, 100.0]`
+</ParamField>
+
+```python
+# Increase likelihood of specific tokens
+SamplingParams(
+    logit_bias={128: 2.0, 256: -5.0},  # Boost token 128, suppress 256
+    temperature=0.8
+)
+```
+
+### Allowed token IDs
+
+<ParamField path="allowed_token_ids" type="list[int] | None" default="None">
+  Restrict generation to only these token IDs.
+  
+  - Cannot be empty
+  - All IDs must be in vocabulary range
+</ParamField>
+
+### Bad words
+
+<ParamField path="bad_words" type="list[str] | None" default="None">
+  Words that are not allowed in the generated output.
+</ParamField>
+
+```python
+# Prevent specific words from being generated
+SamplingParams(
+    bad_words=["forbidden", "banned"],
+    max_tokens=100
+)
+```
+
+### Detokenization options
+
+<ParamField path="detokenize" type="bool" default="True">
+  Whether to detokenize the output. When `False`, only token IDs are returned.
+</ParamField>
+
+<ParamField path="skip_special_tokens" type="bool" default="True">
+  Whether to skip special tokens in the output text.
+</ParamField>
+
+<ParamField path="spaces_between_special_tokens" type="bool" default="True">
+  Whether to add spaces between special tokens in the output.
+</ParamField>
+
+<ParamField path="include_stop_str_in_output" type="bool" default="False">
+  Whether to include stop strings in the output text.
+</ParamField>
+
+## Complete example
+
+```python
+from vllm import LLM, SamplingParams
+
+llm = LLM(model="meta-llama/Llama-3.2-3B-Instruct")
+
+# Configure comprehensive sampling parameters
+sampling_params = SamplingParams(
+    # Randomness
+    temperature=0.8,
+    top_p=0.95,
+    top_k=50,
+    seed=42,
+    
+    # Length control
+    max_tokens=256,
+    min_tokens=10,
+    
+    # Repetition control
+    presence_penalty=0.5,
+    frequency_penalty=0.5,
+    repetition_penalty=1.1,
+    
+    # Stop conditions
+    stop=["\n\n", "END"],
+    
+    # Outputs
+    n=1,
+    logprobs=5
+)
+
+prompts = [
+    "Explain quantum computing in simple terms:",
+    "What are the benefits of exercise?"
+]
+
+outputs = llm.generate(prompts, sampling_params)
+
+for output in outputs:
+    print(f"Prompt: {output.prompt}")
+    print(f"Generated: {output.outputs[0].text}")
+    print("-" * 50)
+```
+
+## Related resources
+
+- [Structured outputs](/features/structured-outputs) - Generate JSON, regex, or grammar-constrained output
+- [OpenAI API reference](https://platform.openai.com/docs/api-reference/completions/create) - vLLM follows this specification
+- Source: `vllm/sampling_params.py:119`

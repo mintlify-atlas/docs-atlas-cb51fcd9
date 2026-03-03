@@ -1,0 +1,232 @@
+---
+title: System architecture
+description: Understand vLLM's multi-process architecture and core components
+---
+
+vLLM is a high-throughput and memory-efficient inference engine designed for LLMs. This page explains the system architecture, including the multi-process design, core components, and how they work together to deliver efficient model serving.
+
+## Architecture overview
+
+vLLM's architecture separates concerns across multiple processes to maximize throughput and resource utilization. The system consists of several key components:
+
+- **Engine Core** - Manages scheduling and KV cache coordination
+- **Model Executor** - Handles distributed model execution across workers
+- **GPU Workers** - Execute model forward passes on individual GPUs
+- **Scheduler** - Implements request batching and token scheduling
+- **KV Cache Manager** - Manages memory allocation using PagedAttention
+
+## Multi-process architecture (V1)
+
+vLLM V1 uses a multi-process architecture to separate HTTP handling, scheduling, and GPU execution. Understanding this architecture is important for properly sizing CPU resources in your deployment.
+
+### API server process
+
+The API server process handles HTTP requests (e.g., the OpenAI-compatible API), performs input processing (tokenization, multi-modal data loading), and streams results back to clients. It communicates with engine core processes via ZMQ sockets.
+
+**Process count:** By default, there is 1 API server process, but when data parallelism is used, the API server count automatically scales to match the data parallel size. This can also be manually configured with `--api-server-count`.
+
+**Location in codebase:** `vllm/entrypoints/openai/api_server.py:88`, `vllm/v1/utils.py`
+
+### Engine core process
+
+The engine core process runs the scheduler, manages KV cache, and coordinates model execution across GPU workers. It runs a busy loop that continuously schedules requests and dispatches work to the GPU workers.
+
+**Process count:** 1 engine core process per data parallel rank. For example, with `--data-parallel-size 4`, there are 4 engine core processes.
+
+**Location in codebase:** `vllm/v1/engine/core.py:84`, `vllm/v1/core/sched/scheduler.py:63`
+
+<Note>
+The EngineCore class implements the inner loop of vLLM's engine, coordinating between the scheduler and model executor.
+</Note>
+
+### GPU worker processes
+
+Each GPU is managed by a dedicated worker process. The worker process loads model weights, executes forward passes, and manages GPU memory.
+
+**Process count:** 1 worker process per GPU. The total number equals `tensor_parallel_size x pipeline_parallel_size` per engine core.
+
+**Location in codebase:** `vllm/v1/worker/gpu_worker.py`, `vllm/v1/worker/gpu_model_runner.py`
+
+### DP coordinator process
+
+When using data parallelism (`--data-parallel-size > 1`), an additional coordinator process manages load balancing across DP ranks and coordinates synchronized forward passes for MoE models.
+
+**Process count:** 1 DP coordinator process (only when data parallelism is enabled).
+
+**Location in codebase:** `vllm/v1/engine/coordinator.py`
+
+### Process count summary
+
+For a deployment with N GPUs, TP tensor parallel size, DP data parallel size, and A API server count:
+
+| Process Type | Count | Notes |
+|---|---|---|
+| API Server | A (default DP) | Handles HTTP requests and input processing |
+| Engine Core | DP (default 1) | Scheduler and KV cache management |
+| GPU Worker | N (= DP x TP) | One per GPU, executes model forward passes |
+| DP Coordinator | 1 if DP > 1, else 0 | Load balancing across DP ranks |
+| **Total** | **A + DP + N (+ 1 if DP > 1)** | |
+
+<Tip>
+A typical single-node deployment with 4 GPUs (`vllm serve -tp=4`) has:
+- 1 API server + 1 engine core + 4 GPU workers = **6 processes**
+</Tip>
+
+## Core components
+
+### LLMEngine
+
+The `LLMEngine` class is the central component responsible for receiving requests and generating outputs. It includes:
+
+- **Input Processing** - Tokenization using the specified tokenizer
+- **Scheduling** - Chooses which requests are processed in each step
+- **Model Execution** - Manages distributed execution across multiple GPUs
+- **Output Processing** - Decodes token IDs into human-readable text
+
+**Location in codebase:** `vllm/v1/engine/llm_engine.py:48`
+
+### Worker and model runner
+
+A worker is a process that runs model inference. vLLM uses one process per accelerator device. Workers are identified by `rank` (for global orchestration) and `local_rank` (for device assignment and local resources).
+
+Every worker has one model runner object (`GPUModelRunner`) responsible for:
+- Loading model weights
+- Preparing input tensors
+- Capturing CUDA graphs for optimization
+- Executing the actual model forward pass
+
+**Location in codebase:** `vllm/v1/worker/gpu_model_runner.py`
+
+### Model
+
+Every model runner contains one model object, which is the actual `torch.nn.Module` instance. All vLLM models follow a uniform constructor signature:
+
+```python
+def __init__(self, *, vllm_config: VllmConfig, prefix: str = "")
+```
+
+This uniform interface enables:
+- Easy model initialization without knowing the specific model type
+- Sharding and quantization during initialization (not after)
+- Composition of models (e.g., vision-language models)
+
+## Class hierarchy and design
+
+vLLM's class hierarchy is designed with three key principles:
+
+### 1. Extensibility through VllmConfig
+
+All classes accept a `VllmConfig` object containing all necessary configuration. This eliminates the need to change constructor signatures when adding new features.
+
+**Location in codebase:** `vllm/config.py`
+
+### 2. Uniform model constructors
+
+vLLM supports 50+ model types with a uniform constructor interface. This allows the model runner to create models without knowing the specific type.
+
+### 3. Sharding and quantization at initialization
+
+Features like tensor parallelism and quantization modify weights during initialization, not after. This is critical for large models - for example, running a 405B model on 16x H100 80GB GPUs means each GPU only loads its 50GB shard, not the full 810GB.
+
+<Note>
+The complete `VllmConfig` object can be treated as an engine-level global state that is shared among all vLLM classes.
+</Note>
+
+## Entrypoints
+
+vLLM provides multiple ways to interact with the system:
+
+### LLM class (offline inference)
+
+The `LLM` class provides the primary Python interface for offline inference:
+
+```python
+from vllm import LLM, SamplingParams
+
+llm = LLM(model="facebook/opt-125m")
+outputs = llm.generate(prompts, sampling_params)
+```
+
+**Location in codebase:** `vllm/entrypoints/llm.py`
+
+### OpenAI-compatible API server
+
+The server can be started using:
+
+```bash
+vllm serve <model>
+```
+
+**Location in codebase:** `vllm/entrypoints/openai/api_server.py`, `vllm/entrypoints/cli/main.py`
+
+<Warning>
+The legacy `python -m vllm.entrypoints.openai.api_server` command is deprecated and may become unsupported in a future release.
+</Warning>
+
+## Execution flow
+
+A typical request flows through the system as follows:
+
+<Steps>
+
+### Request arrival
+
+A request arrives at the API server through the OpenAI-compatible endpoint or LLM class.
+
+### Input processing
+
+The input processor tokenizes the prompt and prepares an `EngineCoreRequest`.
+
+### Scheduling
+
+The scheduler in the engine core decides which requests to process based on:
+- Available KV cache blocks
+- Maximum batch size constraints
+- Request priorities
+
+### Batch formation
+
+The scheduler creates batches of requests using continuous batching, allowing new requests to join ongoing batches.
+
+### Model execution
+
+GPU workers execute the model forward pass in parallel, utilizing tensor/pipeline parallelism as configured.
+
+### Output processing
+
+The output processor decodes tokens and checks stopping conditions (EOS tokens, max length, stop strings).
+
+### Response streaming
+
+Results are streamed back to clients through the API server.
+
+</Steps>
+
+## Memory management
+
+vLLM's memory efficiency comes from several key techniques:
+
+- **PagedAttention** - KV cache stored in non-contiguous blocks (see [PagedAttention](/concepts/paged-attention))
+- **CUDA Graphs** - Kernel launch overhead eliminated for decode phase
+- **Prefix Caching** - Common prompt prefixes share KV cache blocks
+- **Continuous Batching** - Requests dynamically join/leave batches
+
+**Location in codebase:** `vllm/v1/core/kv_cache_manager.py:94`, `vllm/v1/core/block_pool.py`
+
+## Configuration objects
+
+The `VllmConfig` class encapsulates all configuration needed across the system:
+
+- `ModelConfig` - Model architecture and tokenizer settings
+- `CacheConfig` - KV cache size and block configuration  
+- `ParallelConfig` - Tensor/pipeline/data parallelism settings
+- `SchedulerConfig` - Batch size and scheduling policies
+- `LoRAConfig` - LoRA adapter settings
+
+This design allows new features to be added by extending the config object without changing class constructors throughout the hierarchy.
+
+## Next steps
+
+- Learn about [PagedAttention](/concepts/paged-attention) for efficient memory management
+- Understand [Model execution](/concepts/model-execution) and inference flow
+- Explore [Performance optimization](/configuration/optimization) techniques

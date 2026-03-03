@@ -1,0 +1,421 @@
+---
+title: Installation
+description: Install vLLM on your hardware platform
+---
+
+vLLM supports a wide range of hardware platforms for LLM inference and serving. Choose your platform below for specific installation instructions.
+
+## Supported platforms
+
+<CardGroup cols={2}>
+  <Card title="NVIDIA CUDA" icon="nvidia" href="#nvidia-cuda">
+    Install on NVIDIA GPUs with CUDA support
+  </Card>
+  <Card title="AMD ROCm" icon="microchip" href="#amd-rocm">
+    Install on AMD GPUs with ROCm
+  </Card>
+  <Card title="Google TPU" icon="google" href="#google-tpu">
+    Install on Google Cloud TPUs
+  </Card>
+  <Card title="Intel XPU" icon="microchip" href="#intel-xpu">
+    Install on Intel GPUs
+  </Card>
+  <Card title="CPU" icon="server" href="#cpu-platforms">
+    Install for CPU-only inference
+  </Card>
+  <Card title="Hardware plugins" icon="plug" href="#hardware-plugins">
+    Third-party hardware accelerators
+  </Card>
+</CardGroup>
+
+## Requirements
+
+### System requirements
+
+<CardGroup cols={2}>
+  <Card title="Operating system" icon="linux">
+    Linux (including WSL on Windows)
+  </Card>
+  <Card title="Python version" icon="python">
+    Python 3.10, 3.11, 3.12, or 3.13
+  </Card>
+</CardGroup>
+
+<Note>
+  vLLM does not support Windows natively. To run vLLM on Windows, use the Windows Subsystem for Linux (WSL) with a compatible Linux distribution, or use community-maintained forks like [vllm-windows](https://github.com/SystemPanic/vllm-windows).
+</Note>
+
+## NVIDIA CUDA
+
+### CUDA requirements
+
+- NVIDIA GPU with compute capability 7.0 or higher
+- CUDA 12.x or 13.x
+- Driver version compatible with CUDA version
+
+### Install with pip (recommended)
+
+<Steps>
+  <Step title="Set up Python environment">
+    Create a new environment using `uv` (recommended):
+
+    ```bash
+    uv venv --python 3.12 --seed
+    source .venv/bin/activate
+    ```
+
+    <Tip>
+      Install `uv` following the [official documentation](https://docs.astral.sh/uv/#getting-started). It's significantly faster than pip and conda.
+    </Tip>
+  </Step>
+
+  <Step title="Install vLLM">
+    Install vLLM with automatic CUDA backend detection:
+
+    ```bash
+    uv pip install vllm --torch-backend=auto
+    ```
+
+    Or specify a specific CUDA version:
+
+    ```bash
+    # For CUDA 12.6
+    uv pip install vllm --torch-backend=cu126
+
+    # For CUDA 13.0
+    uv pip install vllm --torch-backend=cu130
+    ```
+  </Step>
+
+  <Step title="Verify installation">
+    ```bash
+    python -c "import vllm; print(vllm.__version__)"
+    ```
+  </Step>
+</Steps>
+
+### Using conda
+
+If you prefer conda for environment management:
+
+```bash
+conda create -n vllm-env python=3.12 -y
+conda activate vllm-env
+pip install --upgrade uv
+uv pip install vllm --torch-backend=auto
+```
+
+### Build from source
+
+For the latest features or custom builds:
+
+<Steps>
+  <Step title="Install build dependencies">
+    ```bash
+    pip install cmake>=3.26.1 ninja packaging setuptools-scm>=8.0
+    ```
+  </Step>
+
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/vllm-project/vllm.git
+    cd vllm
+    ```
+  </Step>
+
+  <Step title="Build and install">
+    ```bash
+    pip install -e .
+    ```
+
+    <Note>
+      Building from source requires CUDA toolkit to be installed. Set `CUDA_HOME` environment variable if needed:
+      ```bash
+      export CUDA_HOME=/usr/local/cuda
+      ```
+    </Note>
+  </Step>
+</Steps>
+
+### Docker images
+
+Pre-built Docker images are available for NVIDIA CUDA:
+
+```bash
+# Pull the latest image
+docker pull vllm/vllm-openai:latest
+
+# Run with GPU support
+docker run --gpus all \
+    -v ~/.cache/huggingface:/root/.cache/huggingface \
+    --env "HF_TOKEN=<your_hf_token>" \
+    -p 8000:8000 \
+    --ipc=host \
+    vllm/vllm-openai:latest \
+    --model Qwen/Qwen2.5-1.5B-Instruct
+```
+
+<Tip>
+  Mount the HuggingFace cache directory to avoid re-downloading models on container restart.
+</Tip>
+
+## AMD ROCm
+
+### ROCm requirements
+
+- AMD GPU with ROCm support
+- ROCm 7.0
+- `glibc >= 2.35`
+- Python 3.12
+
+### Install with pip
+
+```bash
+uv venv --python 3.12 --seed
+source .venv/bin/activate
+uv pip install vllm --extra-index-url https://wheels.vllm.ai/rocm/
+```
+
+<Warning>
+  The `uv` package manager gives the extra index higher priority than the default index, which is important for ROCm wheel installation.
+</Warning>
+
+### Docker images
+
+vLLM provides ROCm-compatible Docker images:
+
+```bash
+# Pull ROCm image
+docker pull vllm/vllm-openai:latest-rocm
+
+# Run with ROCm support
+docker run --device /dev/kfd --device /dev/dri \
+    -v ~/.cache/huggingface:/root/.cache/huggingface \
+    -p 8000:8000 \
+    --ipc=host \
+    vllm/vllm-openai:latest-rocm \
+    --model Qwen/Qwen2.5-1.5B-Instruct
+```
+
+## Google TPU
+
+vLLM supports Google Cloud TPUs through the `vllm-tpu` package.
+
+### Install vLLM for TPU
+
+```bash
+uv pip install vllm-tpu
+```
+
+<Note>
+  For comprehensive TPU installation instructions, including Docker images, building from source, and troubleshooting, refer to the [vLLM on TPU documentation](https://docs.vllm.ai/projects/tpu/en/latest/).
+</Note>
+
+## Intel XPU
+
+vLLM supports Intel Data Center GPUs (formerly Xe).
+
+### XPU requirements
+
+- Intel Data Center GPU
+- Intel Extension for PyTorch
+
+### Install with pip
+
+```bash
+uv pip install vllm --extra-index-url https://pytorch-extension.intel.com/release-whl/stable/xpu/us/
+```
+
+## CPU platforms
+
+vLLM can run on various CPU architectures for inference without GPU acceleration.
+
+### Supported CPU architectures
+
+<CardGroup cols={2}>
+  <Card title="Intel/AMD x86_64" icon="microchip">
+    Standard x86-64 processors with AVX2 support
+  </Card>
+  <Card title="ARM AArch64" icon="microchip">
+    ARM 64-bit processors
+  </Card>
+  <Card title="Apple Silicon" icon="apple">
+    M1, M2, M3 chips via CPU mode
+  </Card>
+  <Card title="IBM Z (S390X)" icon="server">
+    IBM mainframe processors
+  </Card>
+</CardGroup>
+
+### Install for CPU
+
+```bash
+uv venv --python 3.12 --seed
+source .venv/bin/activate
+uv pip install vllm-cpu
+```
+
+<Warning>
+  CPU inference is significantly slower than GPU inference. It's recommended for development, testing, or scenarios where GPUs are not available.
+</Warning>
+
+## Hardware plugins
+
+vLLM supports third-party hardware through a plugin system. These plugins live outside the main vLLM repository.
+
+### Available hardware plugins
+
+- **Intel Gaudi** - Intel's AI accelerator chips
+- **IBM Spyre** - IBM's AI acceleration platform
+- **Huawei Ascend** - Huawei's NPU platform
+- And more...
+
+<Note>
+  For a complete list of supported hardware, visit the [vLLM website](https://vllm.ai/#hardware). To add new hardware support, contact the team on [Slack](https://slack.vllm.ai/) or via [email](mailto:collaboration@vllm.ai).
+</Note>
+
+## Dependencies
+
+vLLM requires several core dependencies that are automatically installed:
+
+### Core dependencies
+
+```txt
+torch==2.10.0
+transformers >= 4.56.0, < 5
+tokenizers >= 0.21.1
+fastapi[standard] >= 0.115.0
+aiohttp >= 3.13.3
+openai >= 1.99.1
+pydantic >= 2.12.0
+```
+
+### CUDA-specific dependencies
+
+```txt
+ray[cgraph]>=2.48.0
+flashinfer-python==0.6.4
+nvidia-cutlass-dsl>=4.4.0.dev1
+quack-kernels>=0.2.7
+```
+
+### Optional dependencies
+
+vLLM provides optional extras for specific use cases:
+
+<CodeGroup>
+```bash Benchmarking
+pip install vllm[bench]
+```
+
+```bash Audio processing
+pip install vllm[audio]
+```
+
+```bash OpenTelemetry
+pip install vllm[otel]
+```
+
+```bash Tensorizer
+pip install vllm[tensorizer]
+```
+</CodeGroup>
+
+## Environment variables
+
+Common environment variables for customizing vLLM behavior:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `VLLM_USE_MODELSCOPE` | Use ModelScope instead of HuggingFace | `False` |
+| `VLLM_ATTENTION_BACKEND` | Set attention backend | Auto-detected |
+| `CUDA_HOME` | Path to CUDA installation | `/usr/local/cuda` |
+| `HF_TOKEN` | HuggingFace API token | None |
+| `VLLM_API_KEY` | API key for server authentication | None |
+
+## Verify installation
+
+After installation, verify vLLM works correctly:
+
+<Steps>
+  <Step title="Check version">
+    ```bash
+    python -c "import vllm; print(f'vLLM version: {vllm.__version__}')"
+    ```
+  </Step>
+
+  <Step title="Run quick test">
+    ```python
+    from vllm import LLM, SamplingParams
+
+    # Create a simple LLM instance
+    llm = LLM(model="facebook/opt-125m")
+    
+    # Generate text
+    output = llm.generate("Hello, my name is", SamplingParams(max_tokens=10))
+    print(output[0].outputs[0].text)
+    ```
+  </Step>
+
+  <Step title="Test server mode">
+    ```bash
+    vllm serve facebook/opt-125m --port 8000
+    ```
+
+    In another terminal:
+    ```bash
+    curl http://localhost:8000/v1/models
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### Common issues
+
+<AccordionGroup>
+  <Accordion title="CUDA out of memory">
+    Reduce the model size, batch size, or use tensor parallelism:
+    ```bash
+    vllm serve <model> --tensor-parallel-size 2 --max-model-len 2048
+    ```
+  </Accordion>
+
+  <Accordion title="Module not found errors">
+    Ensure you activated the correct virtual environment and all dependencies are installed:
+    ```bash
+    pip install --upgrade vllm
+    ```
+  </Accordion>
+
+  <Accordion title="Slow model loading">
+    Mount the HuggingFace cache directory or pre-download models:
+    ```bash
+    huggingface-cli download <model_name>
+    ```
+  </Accordion>
+
+  <Accordion title="Flash Attention not found">
+    Flash Attention is automatically installed with CUDA builds. For FlashInfer:
+    ```bash
+    pip install flashinfer-python
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart guide" icon="rocket" href="/quickstart">
+    Start running inference with vLLM
+  </Card>
+  <Card title="Supported models" icon="list" href="/models/supported-models">
+    Explore compatible models
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/engine-args">
+    Learn about configuration options
+  </Card>
+  <Card title="Deployment" icon="server" href="/deployment/docker">
+    Deploy vLLM in production
+  </Card>
+</CardGroup>

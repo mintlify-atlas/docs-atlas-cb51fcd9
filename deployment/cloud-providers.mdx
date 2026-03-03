@@ -1,0 +1,420 @@
+---
+title: Cloud provider deployment
+description: Deploy vLLM on AWS, GCP, Azure, and other cloud platforms
+---
+
+## Overview
+
+vLLM can be deployed on all major cloud providers using their managed Kubernetes services, VM instances, or specialized AI platforms. This guide covers deployment options for AWS, GCP, and Azure.
+
+## AWS deployment
+
+### Amazon EKS (Elastic Kubernetes Service)
+
+<Steps>
+  <Step title="Create EKS cluster">
+    Create a GPU-enabled EKS cluster:
+
+    ```bash
+    eksctl create cluster \
+      --name vllm-cluster \
+      --region us-west-2 \
+      --nodegroup-name gpu-nodes \
+      --node-type g5.xlarge \
+      --nodes 2 \
+      --nodes-min 1 \
+      --nodes-max 4
+    ```
+  </Step>
+
+  <Step title="Install NVIDIA device plugin">
+    ```bash
+    kubectl create -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.0/nvidia-device-plugin.yml
+    ```
+  </Step>
+
+  <Step title="Deploy vLLM">
+    Follow the [Kubernetes deployment guide](/deployment/kubernetes) to deploy vLLM to your EKS cluster.
+  </Step>
+</Steps>
+
+### Amazon EC2 instances
+
+Deploy vLLM directly on EC2 GPU instances:
+
+<Steps>
+  <Step title="Launch GPU instance">
+    Choose an appropriate GPU instance type:
+    
+    | Instance Type | GPUs | vRAM | Use Case |
+    |--------------|------|------|----------|
+    | g5.xlarge | 1x A10G | 24GB | Small models (7B) |
+    | g5.12xlarge | 4x A10G | 96GB | Medium models (13B-70B) |
+    | p4d.24xlarge | 8x A100 | 320GB | Large models (70B+) |
+    | p5.48xlarge | 8x H100 | 640GB | Largest models |
+  </Step>
+
+  <Step title="Install dependencies">
+    ```bash
+    # Install CUDA drivers
+    sudo apt update
+    sudo apt install -y nvidia-driver-535 nvidia-cuda-toolkit
+
+    # Install Docker
+    curl -fsSL https://get.docker.com -o get-docker.sh
+    sudo sh get-docker.sh
+
+    # Install NVIDIA Container Toolkit
+    distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+    curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
+    curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | \
+      sudo tee /etc/apt/sources.list.d/nvidia-docker.list
+    
+    sudo apt-get update
+    sudo apt-get install -y nvidia-container-toolkit
+    sudo systemctl restart docker
+    ```
+  </Step>
+
+  <Step title="Run vLLM with Docker">
+    ```bash
+    docker run --runtime nvidia --gpus all \
+      -v ~/.cache/huggingface:/root/.cache/huggingface \
+      -p 8000:8000 \
+      --ipc=host \
+      vllm/vllm-openai:latest \
+      --model meta-llama/Meta-Llama-3-8B-Instruct \
+      --tensor-parallel-size $(nvidia-smi -L | wc -l)
+    ```
+  </Step>
+</Steps>
+
+### Amazon SageMaker
+
+vLLM provides a SageMaker-compatible image:
+
+```python
+import boto3
+from sagemaker import get_execution_role
+from sagemaker.model import Model
+
+role = get_execution_role()
+
+model = Model(
+    image_uri="vllm/vllm-openai:latest",
+    role=role,
+    env={
+        "MODEL_NAME": "meta-llama/Meta-Llama-3-8B-Instruct",
+        "HF_TOKEN": "your-hf-token"
+    }
+)
+
+predictor = model.deploy(
+    instance_type="ml.g5.xlarge",
+    initial_instance_count=1
+)
+```
+
+<Note>
+  The vLLM SageMaker image includes the `sagemaker-entrypoint.sh` script for automatic model loading.
+</Note>
+
+## GCP deployment
+
+### Google Kubernetes Engine (GKE)
+
+<Steps>
+  <Step title="Create GKE cluster with GPUs">
+    ```bash
+    gcloud container clusters create vllm-cluster \
+      --zone us-central1-a \
+      --machine-type n1-standard-4 \
+      --accelerator type=nvidia-tesla-t4,count=1 \
+      --num-nodes 2 \
+      --enable-autoscaling \
+      --min-nodes 1 \
+      --max-nodes 4
+    ```
+  </Step>
+
+  <Step title="Install NVIDIA drivers">
+    ```bash
+    kubectl apply -f https://raw.githubusercontent.com/GoogleCloudPlatform/container-engine-accelerators/master/nvidia-driver-installer/cos/daemonset-preloaded.yaml
+    ```
+  </Step>
+
+  <Step title="Deploy vLLM">
+    Use the [Kubernetes deployment guide](/deployment/kubernetes) with GKE-specific configurations.
+  </Step>
+</Steps>
+
+### Google Compute Engine
+
+Deploy on GCE VM instances:
+
+```bash
+# Create GPU instance
+gcloud compute instances create vllm-instance \
+  --zone=us-central1-a \
+  --machine-type=n1-standard-8 \
+  --accelerator=type=nvidia-tesla-t4,count=1 \
+  --maintenance-policy=TERMINATE \
+  --image-family=ubuntu-2004-lts \
+  --image-project=ubuntu-os-cloud \
+  --boot-disk-size=200GB
+
+# SSH and install
+gcloud compute ssh vllm-instance --zone=us-central1-a
+
+# Follow EC2 installation steps above
+```
+
+### Vertex AI
+
+Deploy using Vertex AI custom containers:
+
+```python
+from google.cloud import aiplatform
+
+aiplatform.init(project="your-project-id", location="us-central1")
+
+model = aiplatform.Model.upload(
+    display_name="vllm-llama3",
+    serving_container_image_uri="vllm/vllm-openai:latest",
+    serving_container_environment_variables={
+        "MODEL_NAME": "meta-llama/Meta-Llama-3-8B-Instruct"
+    }
+)
+
+endpoint = model.deploy(
+    machine_type="n1-standard-4",
+    accelerator_type="NVIDIA_TESLA_T4",
+    accelerator_count=1
+)
+```
+
+## Azure deployment
+
+### Azure Kubernetes Service (AKS)
+
+<Steps>
+  <Step title="Create AKS cluster">
+    ```bash
+    az aks create \
+      --resource-group vllm-rg \
+      --name vllm-cluster \
+      --node-count 2 \
+      --node-vm-size Standard_NC6s_v3 \
+      --enable-cluster-autoscaler \
+      --min-count 1 \
+      --max-count 4 \
+      --generate-ssh-keys
+    ```
+  </Step>
+
+  <Step title="Get credentials">
+    ```bash
+    az aks get-credentials \
+      --resource-group vllm-rg \
+      --name vllm-cluster
+    ```
+  </Step>
+
+  <Step title="Deploy vLLM">
+    Follow the [Kubernetes deployment guide](/deployment/kubernetes).
+  </Step>
+</Steps>
+
+### Azure Virtual Machines
+
+Deploy on Azure GPU VMs:
+
+```bash
+az vm create \
+  --resource-group vllm-rg \
+  --name vllm-vm \
+  --image UbuntuLTS \
+  --size Standard_NC6s_v3 \
+  --admin-username azureuser \
+  --generate-ssh-keys
+
+az vm run-command invoke \
+  --resource-group vllm-rg \
+  --name vllm-vm \
+  --command-id RunShellScript \
+  --scripts @install-vllm.sh
+```
+
+## Multi-cloud deployment with SkyPilot
+
+SkyPilot enables deployment across AWS, GCP, and Azure with a single configuration:
+
+<Steps>
+  <Step title="Install SkyPilot">
+    ```bash
+    pip install skypilot-nightly
+    sky check
+    ```
+  </Step>
+
+  <Step title="Create deployment YAML">
+    <CodeGroup>
+    ```yaml serving.yaml
+    resources:
+      accelerators: {L4, A10g, A10, L40, A40, A100, A100-80GB}
+      use_spot: True
+      disk_size: 512
+      disk_tier: best
+      ports: 8081
+
+    envs:
+      MODEL_NAME: meta-llama/Meta-Llama-3-8B-Instruct
+      HF_TOKEN: <your-token>
+
+    setup: |
+      conda create -n vllm python=3.10 -y
+      conda activate vllm
+      pip install vllm
+
+    run: |
+      conda activate vllm
+      vllm serve $MODEL_NAME \
+        --port 8081 \
+        --trust-remote-code \
+        --tensor-parallel-size $SKYPILOT_NUM_GPUS_PER_NODE
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Launch on any cloud">
+    ```bash
+    # Launch on cheapest available cloud
+    HF_TOKEN="your-token" sky launch serving.yaml --env HF_TOKEN
+
+    # Force specific cloud
+    HF_TOKEN="your-token" sky launch serving.yaml --cloud aws --env HF_TOKEN
+    HF_TOKEN="your-token" sky launch serving.yaml --cloud gcp --env HF_TOKEN
+    HF_TOKEN="your-token" sky launch serving.yaml --cloud azure --env HF_TOKEN
+    ```
+  </Step>
+
+  <Step title="Scale with autoscaling">
+    ```yaml
+    service:
+      replica_policy:
+        min_replicas: 2
+        max_replicas: 10
+        target_qps_per_replica: 2
+    ```
+
+    Deploy with autoscaling:
+    ```bash
+    sky serve up -n vllm serving.yaml --env HF_TOKEN
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  SkyPilot automatically selects the cheapest cloud and GPU type based on availability and pricing.
+</Tip>
+
+## Cloud-specific optimizations
+
+### AWS optimizations
+
+- Use **EFA (Elastic Fabric Adapter)** for multi-node deployments on p4d/p5 instances
+- Enable **S3 model caching** to reduce startup time
+- Use **EC2 Spot Instances** for cost savings (up to 90% cheaper)
+
+### GCP optimizations
+
+- Use **Compact Placement Policies** for multi-GPU communication
+- Enable **GCS FUSE** for model caching
+- Use **Preemptible VMs** for cost savings
+
+### Azure optimizations
+
+- Use **InfiniBand** on NDv4 series for multi-node communication
+- Enable **Azure Blob Storage** for model caching
+- Use **Spot VMs** for cost savings
+
+## Managed platforms
+
+Cloud-native AI platforms with vLLM support:
+
+### Hugging Face Inference Endpoints
+
+Deploy models with one click:
+
+1. Go to [Hugging Face Inference Endpoints](https://huggingface.co/inference-endpoints)
+2. Select your model
+3. Choose **vLLM** as the container type
+4. Select cloud provider (AWS, Azure, GCP)
+5. Choose GPU type (T4, L4, A10G, A100)
+6. Deploy
+
+<Note>
+  Hugging Face manages the infrastructure, scaling, and monitoring for you.
+</Note>
+
+### Anyscale
+
+[Anyscale](https://www.anyscale.com/) provides managed Ray clusters with vLLM:
+
+- Automatic scaling across AWS, GCP, Azure
+- Built-in observability and monitoring
+- Multi-model serving
+- Production-ready deployments
+
+### Modal
+
+Deploy vLLM on [Modal](https://modal.com/) with serverless infrastructure:
+
+```python
+import modal
+
+app = modal.App("vllm-app")
+image = modal.Image.debian_slim().pip_install("vllm")
+
+@app.function(
+    gpu="A100",
+    image=image,
+    timeout=600
+)
+def serve_model():
+    from vllm import LLM
+    llm = LLM(model="meta-llama/Meta-Llama-3-8B-Instruct")
+    return llm
+```
+
+## Cost optimization strategies
+
+<Steps>
+  <Step title="Use spot/preemptible instances">
+    Save 60-90% on compute costs with spot instances. SkyPilot automatically handles spot instance interruptions.
+  </Step>
+
+  <Step title="Enable autoscaling">
+    Scale down to zero during off-peak hours. Use Kubernetes HPA or cloud-native autoscaling.
+  </Step>
+
+  <Step title="Right-size GPU selection">
+    - 7B models: T4, L4 (consumer GPUs)
+    - 13B-70B models: A10G, A100 40GB
+    - 70B+ models: A100 80GB, H100
+  </Step>
+
+  <Step title="Use model caching">
+    Cache models in cloud storage to reduce download time and costs.
+  </Step>
+
+  <Step title="Enable prefix caching">
+    Reduce compute costs by caching common prefixes with vLLM's automatic prefix caching.
+  </Step>
+</Steps>
+
+## Next steps
+
+- Review [production deployment best practices](/deployment/production-guide)
+- Learn about [Kubernetes deployment](/deployment/kubernetes)
+- Explore [Docker deployment options](/deployment/docker)

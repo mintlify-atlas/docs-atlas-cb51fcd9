@@ -1,0 +1,302 @@
+---
+title: Chat completions API
+description: REST API endpoint for chat-based text generation
+---
+
+The chat completions endpoint generates responses for conversational interactions. It follows the OpenAI Chat Completions API format.
+
+## Endpoint
+
+```
+POST /v1/chat/completions
+```
+
+## Request body
+
+<ParamField path="model" type="string" required>
+  The model to use for chat completion.
+</ParamField>
+
+<ParamField path="messages" type="array" required>
+  Array of message objects in the conversation. Each message has:
+  
+  <ParamField path="role" type="string" required>
+    The role of the message author: "system", "user", or "assistant".
+  </ParamField>
+  
+  <ParamField path="content" type="string | array" required>
+    The content of the message. Can be a string or array of content parts for multi-modal inputs.
+  </ParamField>
+  
+  <ParamField path="name" type="string">
+    Optional name for the message author.
+  </ParamField>
+</ParamField>
+
+<ParamField path="max_tokens" type="integer" default="null">
+  Maximum number of tokens to generate. Deprecated in favor of `max_completion_tokens`.
+</ParamField>
+
+<ParamField path="max_completion_tokens" type="integer" default="null">
+  Maximum number of tokens to generate in the completion.
+</ParamField>
+
+<ParamField path="temperature" type="number" default="1.0">
+  Sampling temperature between 0 and 2.
+</ParamField>
+
+<ParamField path="top_p" type="number" default="1.0">
+  Nucleus sampling threshold.
+</ParamField>
+
+<ParamField path="n" type="integer" default="1">
+  Number of chat completion choices to generate.
+</ParamField>
+
+<ParamField path="stream" type="boolean" default="false">
+  Whether to stream partial message deltas.
+</ParamField>
+
+<ParamField path="stop" type="string | array" default="null">
+  Up to 4 sequences where generation will stop.
+</ParamField>
+
+<ParamField path="presence_penalty" type="number" default="0.0">
+  Penalty for tokens that have already appeared. Range: [-2.0, 2.0].
+</ParamField>
+
+<ParamField path="frequency_penalty" type="number" default="0.0">
+  Penalty for tokens based on their frequency. Range: [-2.0, 2.0].
+</ParamField>
+
+<ParamField path="logit_bias" type="object" default="null">
+  Modify likelihood of specified tokens.
+</ParamField>
+
+<ParamField path="seed" type="integer" default="null">
+  Random seed for deterministic sampling.
+</ParamField>
+
+<ParamField path="logprobs" type="boolean" default="false">
+  Whether to return log probabilities.
+</ParamField>
+
+<ParamField path="top_logprobs" type="integer" default="0">
+  Number of most likely tokens to return at each position (0-20).
+</ParamField>
+
+### Function calling
+
+<ParamField path="tools" type="array" default="null">
+  List of tools (functions) the model can call.
+</ParamField>
+
+<ParamField path="tool_choice" type="string | object" default="none">
+  Controls which tool is called: "none", "auto", "required", or specific tool.
+</ParamField>
+
+### vLLM-specific parameters
+
+<ParamField path="top_k" type="integer" default="-1">
+  Number of highest probability tokens to keep.
+</ParamField>
+
+<ParamField path="min_p" type="number" default="0.0">
+  Minimum probability threshold.
+</ParamField>
+
+<ParamField path="repetition_penalty" type="number" default="1.0">
+  Penalty for token repetition.
+</ParamField>
+
+<ParamField path="stop_token_ids" type="array" default="[]">
+  Token IDs that will stop generation.
+</ParamField>
+
+<ParamField path="ignore_eos" type="boolean" default="false">
+  Whether to ignore the EOS token.
+</ParamField>
+
+## Response format
+
+### Non-streaming response
+
+<ResponseField name="id" type="string">
+  Unique identifier for the chat completion.
+</ResponseField>
+
+<ResponseField name="object" type="string">
+  Always "chat.completion".
+</ResponseField>
+
+<ResponseField name="created" type="integer">
+  Unix timestamp of creation.
+</ResponseField>
+
+<ResponseField name="model" type="string">
+  The model used.
+</ResponseField>
+
+<ResponseField name="choices" type="array">
+  Array of completion choices.
+  
+  <ResponseField name="index" type="integer">
+    Choice index.
+  </ResponseField>
+  
+  <ResponseField name="message" type="object">
+    The generated message.
+    
+    <ResponseField name="role" type="string">
+      Always "assistant".
+    </ResponseField>
+    
+    <ResponseField name="content" type="string">
+      The generated message content.
+    </ResponseField>
+    
+    <ResponseField name="tool_calls" type="array">
+      Tool calls made by the model, if any.
+    </ResponseField>
+  </ResponseField>
+  
+  <ResponseField name="finish_reason" type="string">
+    Why generation stopped: "stop", "length", "tool_calls", or "content_filter".
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="usage" type="object">
+  Token usage statistics.
+</ResponseField>
+
+## Example: Basic chat
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-2-7b-chat-hf",
+    "messages": [
+      {"role": "system", "content": "You are a helpful assistant."},
+      {"role": "user", "content": "What is the capital of France?"}
+    ],
+    "temperature": 0.7,
+    "max_tokens": 100
+  }'
+```
+
+```json
+{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "created": 1677652288,
+  "model": "meta-llama/Llama-2-7b-chat-hf",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "The capital of France is Paris."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 20,
+    "completion_tokens": 10,
+    "total_tokens": 30
+  }
+}
+```
+
+## Example: Streaming chat
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-2-7b-chat-hf",
+    "messages": [{"role": "user", "content": "Tell me a joke"}],
+    "stream": true
+  }'
+```
+
+Streaming returns Server-Sent Events:
+
+```
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677652288,"model":"meta-llama/Llama-2-7b-chat-hf","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677652288,"model":"meta-llama/Llama-2-7b-chat-hf","choices":[{"index":0,"delta":{"content":"Why"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677652288,"model":"meta-llama/Llama-2-7b-chat-hf","choices":[{"index":0,"delta":{"content":" did"},"finish_reason":null}]}
+
+data: [DONE]
+```
+
+## Example: Multi-turn conversation
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-2-7b-chat-hf",
+    "messages": [
+      {"role": "user", "content": "What is 2+2?"},
+      {"role": "assistant", "content": "2+2 equals 4."},
+      {"role": "user", "content": "What about 3+3?"}
+    ]
+  }'
+```
+
+## Example: With vision (multi-modal)
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llava-hf/llava-1.5-7b-hf",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {"type": "text", "text": "What is in this image?"},
+          {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}}
+        ]
+      }
+    ]
+  }'
+```
+
+## Example: Function calling
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [{"role": "user", "content": "What is the weather in Boston?"}],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Get the current weather",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "location": {"type": "string", "description": "City name"}
+            },
+            "required": ["location"]
+          }
+        }
+      }
+    ],
+    "tool_choice": "auto"
+  }'
+```
+
+## Related
+
+- [Completions endpoint](/api/rest/completions) - For non-chat text generation
+- [Models endpoint](/api/rest/models) - List available models
+- [LLM.chat()](/api/llm#chat) - Python API equivalent

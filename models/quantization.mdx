@@ -1,0 +1,401 @@
+---
+title: Quantization
+description: Reduce model memory with GPTQ, AWQ, INT4, INT8, and FP8 quantization
+---
+
+Quantization trades off model precision for smaller memory footprint, allowing large models to be run on a wider range of devices and improving throughput.
+
+## Why quantization?
+
+Quantization provides several benefits:
+
+- **Reduced memory usage** - Fit larger models or longer contexts in available GPU memory
+- **Faster inference** - Lower precision arithmetic can be faster on modern hardware
+- **Lower costs** - Serve models on smaller/fewer GPUs
+- **Higher throughput** - Process more requests per second with the same hardware
+
+<Note>
+For the best quantization experience, we recommend [LLM Compressor](https://github.com/vllm-project/llm-compressor), a library for optimizing models for deployment with vLLM that supports FP8, INT8, INT4, and other formats.
+</Note>
+
+## Supported quantization methods
+
+vLLM supports the following quantization formats:
+
+### Popular methods
+
+<CardGroup cols={3}>
+  <Card title="FP8" icon="microchip">
+    8-bit floating point (W8A8)
+    
+    Best for: Ada/Hopper GPUs, AMD GPUs
+    
+    Minimal accuracy loss with significant speedup
+  </Card>
+  <Card title="INT8" icon="binary">
+    8-bit integer (W8A8)
+    
+    Best for: Turing+ GPUs, CPUs
+    
+    Good balance of compression and accuracy
+  </Card>
+  <Card title="INT4" icon="compress">
+    4-bit integer (W4A16)
+    
+    Best for: Maximizing compression
+    
+    Highest compression ratio
+  </Card>
+</CardGroup>
+
+### All supported methods
+
+| Method | Description | Key Use Case |
+|--------|-------------|---------------|
+| AutoAWQ | Activation-aware Weight Quantization | Balanced INT4 quantization |
+| GPTQ | GPT Quantization | INT4 weights, widely supported |
+| FP8 | 8-bit floating point | Ada/Hopper GPU acceleration |
+| INT8 | 8-bit integer | Broad hardware support |
+| INT4 | 4-bit integer | Maximum compression |
+| BitsAndBytes | Dynamic quantization | Easy to use, no calibration |
+| GGUF | GPT-Generated Unified Format | llama.cpp compatibility |
+| Quantized KV Cache | KV cache compression | Longer context windows |
+| NVIDIA TensorRT-Model Optimizer | TensorRT optimizations | NVIDIA GPU optimization |
+| AMD Quark | AMD-optimized quantization | AMD GPU optimization |
+| Intel Neural Compressor | Intel optimization | Intel CPU/GPU optimization |
+| TorchAO | PyTorch native quantization | Experimental PyTorch integration |
+
+## Hardware compatibility
+
+The table below shows quantization method compatibility with different hardware:
+
+| Method | Volta (SM 7.0) | Turing (SM 7.5) | Ampere (SM 8.0/8.6) | Ada (SM 8.9) | Hopper (SM 9.0) | AMD GPU | Intel GPU | x86 CPU |
+|--------|----------------|-----------------|---------------------|--------------|-----------------|---------|-----------|----------|
+| AWQ | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ |
+| GPTQ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ |
+| Marlin (GPTQ/AWQ/FP8/FP4) | ❌ | ✅* | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| INT8 (W8A8) | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ |
+| FP8 (W8A8) | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| BitsAndBytes | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| DeepSpeedFP | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| GGUF | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+
+<Note>
+*Turing does not support Marlin MXFP4.
+
+For Google TPU quantization support, see the [TPU-Inference documentation](https://docs.vllm.ai/projects/tpu/en/latest/recommended_models_features/).
+</Note>
+
+## Quick start
+
+### FP8 quantization (recommended for Ada/Hopper)
+
+```python
+from vllm import LLM
+
+# Load FP8 quantized model
+llm = LLM(model="neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8")
+outputs = llm.generate("Hello, my name is")
+print(outputs[0].outputs[0].text)
+```
+
+### GPTQ quantization
+
+```python
+from vllm import LLM
+
+# Load GPTQ quantized model
+llm = LLM(model="TheBloke/Llama-2-7B-Chat-GPTQ")
+outputs = llm.generate("Hello, my name is")
+print(outputs[0].outputs[0].text)
+```
+
+### AWQ quantization
+
+```python
+from vllm import LLM
+
+# Load AWQ quantized model
+llm = LLM(model="TheBloke/Llama-2-7B-Chat-AWQ", quantization="awq")
+outputs = llm.generate("Hello, my name is")
+print(outputs[0].outputs[0].text)
+```
+
+## Creating quantized models
+
+### Using LLM Compressor
+
+LLM Compressor is the recommended tool for quantizing models for vLLM:
+
+```bash
+pip install llmcompressor
+```
+
+```python
+from llmcompressor.transformers import oneshot
+from transformers import AutoTokenizer
+
+# Define the model
+MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
+
+# Load tokenizer
+tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+
+# Configure quantization
+recipe = """
+quant_stage:
+    quant_modifiers:
+        QuantizationModifier:
+            ignore: ["lm_head"]
+            config_groups:
+                group_0:
+                    weights:
+                        num_bits: 8
+                        type: "float"
+                        strategy: "tensor"
+                    input_activations:
+                        num_bits: 8
+                        type: "float"
+                        strategy: "tensor"
+"""
+
+# Apply quantization
+oneshot(
+    model=MODEL_ID,
+    recipe=recipe,
+    output_dir="./Meta-Llama-3-8B-Instruct-FP8",
+    tokenizer=tokenizer,
+)
+```
+
+### Using AutoGPTQ
+
+```python
+from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
+from transformers import AutoTokenizer
+
+model_name = "meta-llama/Llama-2-7b-hf"
+quantize_config = BaseQuantizeConfig(
+    bits=4,
+    group_size=128,
+    desc_act=False,
+)
+
+model = AutoGPTQForCausalLM.from_pretrained(
+    model_name,
+    quantize_config=quantize_config,
+)
+
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+# Quantize
+model.quantize(calibration_dataset)
+
+# Save
+model.save_quantized("./Llama-2-7b-GPTQ")
+tokenizer.save_pretrained("./Llama-2-7b-GPTQ")
+```
+
+## Quantized KV cache
+
+Quantize the KV cache to support longer context windows:
+
+```python
+from vllm import LLM
+
+llm = LLM(
+    model="meta-llama/Meta-Llama-3-8B-Instruct",
+    kv_cache_dtype="fp8",
+)
+```
+
+Supported KV cache dtypes:
+- `fp8` - 8-bit floating point
+- `fp8_e5m2` - FP8 with 5 exponent bits, 2 mantissa bits
+- `fp8_e4m3` - FP8 with 4 exponent bits, 3 mantissa bits
+
+See Quantized KV Cache for more details.
+
+## Performance comparison
+
+Typical memory and performance characteristics:
+
+| Quantization | Memory vs FP16 | Speed vs FP16 | Accuracy vs FP16 |
+|--------------|----------------|---------------|------------------|
+| FP8 (W8A8) | ~50% | 1.5-2x faster | Minimal loss (&lt;1%) |
+| INT8 (W8A8) | ~50% | 1.3-1.5x faster | Minimal loss (~1%) |
+| INT4 (W4A16) | ~25% | 1.1-1.3x faster | Small loss (2-5%) |
+| GPTQ (4-bit) | ~25% | 1.2-1.4x faster | Small loss (2-5%) |
+| AWQ (4-bit) | ~25% | 1.2-1.4x faster | Minimal loss (&lt;2%) |
+
+<Note>
+Actual performance varies based on model size, hardware, batch size, and sequence length. Always benchmark your specific use case.
+</Note>
+
+## Choosing a quantization method
+
+<AccordionGroup>
+  <Accordion title="For Ada/Hopper GPUs (RTX 4090, H100, etc.)">
+    **Recommended: FP8**
+    - Native FP8 tensor cores provide excellent performance
+    - Minimal accuracy loss
+    - Easy to use with LLM Compressor
+    
+    Alternative: INT4/INT8 for maximum compression
+  </Accordion>
+
+  <Accordion title="For Ampere GPUs (A100, RTX 3090, etc.)">
+    **Recommended: INT8**
+    - Good balance of speed and accuracy
+    - Broad support across models
+    
+    Alternative: AWQ/GPTQ for higher compression
+  </Accordion>
+
+  <Accordion title="For AMD GPUs">
+    **Recommended: FP8**
+    - AMD GPUs have good FP8 support
+    - Use AMD Quark for optimized quantization
+    
+    Alternative: GGUF for compatibility
+  </Accordion>
+
+  <Accordion title="For CPUs">
+    **Recommended: INT8**
+    - Good CPU performance
+    - Use Intel Neural Compressor for Intel CPUs
+    
+    Alternative: GPTQ/AWQ for memory-constrained systems
+  </Accordion>
+
+  <Accordion title="For maximum compression">
+    **Recommended: INT4 or GPTQ/AWQ**
+    - ~4x smaller than FP16
+    - Good for very large models
+    - Accept some accuracy tradeoff
+    
+    Combine with quantized KV cache for even longer contexts
+  </Accordion>
+</AccordionGroup>
+
+## Custom quantization plugins
+
+vLLM supports registering custom quantization methods using the `@register_quantization_config` decorator.
+
+<Accordion title="Example: Custom quantization plugin">
+  ```python
+  import torch
+  from vllm.model_executor.layers.quantization import (
+      register_quantization_config,
+  )
+  from vllm.model_executor.layers.quantization.base_config import (
+      QuantizationConfig,
+  )
+
+  @register_quantization_config("my_quant")
+  class MyQuantConfig(QuantizationConfig):
+      def get_name(self) -> str:
+          return "my_quant"
+
+      def get_supported_act_dtypes(self) -> list:
+          return [torch.float16, torch.bfloat16]
+
+      @classmethod
+      def get_min_capability(cls) -> int:
+          return -1  # No GPU restriction
+
+      @staticmethod
+      def get_config_filenames() -> list[str]:
+          return ["my_quant_config.json"]
+
+      @classmethod
+      def from_config(cls, config: dict) -> "MyQuantConfig":
+          return cls()
+
+      def get_quant_method(self, layer, prefix):
+          # Return quantization method for layer
+          ...
+  ```
+
+  Use your custom quantization:
+
+  ```python
+  import my_quant_plugin
+  from vllm import LLM
+
+  llm = LLM(model="your-model", quantization="my_quant")
+  ```
+</Accordion>
+
+See the [Plugin System](/design/plugin-system) documentation for more details.
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Quantization workflow">
+    1. **Evaluate baseline**: Test the full-precision model first
+    2. **Choose method**: Based on hardware and compression needs
+    3. **Quantize**: Use LLM Compressor or model-specific tools
+    4. **Validate**: Check accuracy on representative tasks
+    5. **Benchmark**: Measure throughput and latency improvements
+    6. **Iterate**: Adjust quantization parameters if needed
+  </Accordion>
+
+  <Accordion title="Accuracy preservation">
+    - Use calibration data similar to your inference distribution
+    - FP8 and INT8 typically have &lt;1% accuracy loss
+    - INT4 may require more careful tuning
+    - Consider per-channel vs per-tensor quantization
+    - Test on downstream tasks, not just perplexity
+  </Accordion>
+
+  <Accordion title="Performance optimization">
+    - Combine weight quantization with KV cache quantization
+    - Use appropriate batch sizes for your hardware
+    - Profile to identify bottlenecks
+    - Consider Marlin kernels for GPTQ/AWQ on supported GPUs
+    - Enable tensor parallelism for large models
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Model accuracy is poor after quantization">
+    - Try a higher precision method (INT8 instead of INT4)
+    - Use more calibration data
+    - Check if the model architecture is well-supported
+    - Try AWQ instead of GPTQ for better activation-aware quantization
+  </Accordion>
+
+  <Accordion title="Quantized model is slow">
+    - Ensure you're using the right hardware for the quantization method
+    - Check that optimized kernels (Marlin, etc.) are being used
+    - Verify batch size is appropriate
+    - Profile to identify bottlenecks
+  </Accordion>
+
+  <Accordion title="Out of memory with quantized model">
+    - Enable KV cache quantization
+    - Reduce batch size or max sequence length
+    - Try higher compression (INT4 instead of INT8)
+    - Enable tensor parallelism to distribute across GPUs
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="LLM Compressor" icon="wrench" href="https://github.com/vllm-project/llm-compressor">
+    Quantize models for vLLM deployment
+  </Card>
+  <Card title="FP8 quantization" icon="microchip" href="/models/quantization#fp8">
+    High-performance 8-bit floating point
+  </Card>
+  <Card title="GPTQ quantization" icon="compress" href="/models/quantization#gptq">
+    Popular 4-bit quantization method
+  </Card>
+  <Card title="Quantized KV cache" icon="memory" href="/models/quantization#quantized-kv-cache">
+    Extend context length with cache quantization
+  </Card>
+</CardGroup>

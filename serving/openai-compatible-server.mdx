@@ -1,0 +1,484 @@
+---
+title: OpenAI-compatible API server
+description: Serve LLMs with vLLM's OpenAI-compatible HTTP API for chat, completions, embeddings, and more.
+---
+
+vLLM provides an HTTP server that implements OpenAI's API specifications, allowing you to serve models and interact with them using standard OpenAI clients and tools.
+
+## Quick start
+
+Start the server with the `vllm serve` command:
+
+```bash
+vllm serve NousResearch/Meta-Llama-3-8B-Instruct \
+  --dtype auto \
+  --api-key token-abc123
+```
+
+The server starts on `http://localhost:8000` by default. You can now send requests using the OpenAI Python client:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="token-abc123",
+)
+
+completion = client.chat.completions.create(
+    model="NousResearch/Meta-Llama-3-8B-Instruct",
+    messages=[
+        {"role": "user", "content": "Hello!"},
+    ],
+)
+
+print(completion.choices[0].message)
+```
+
+<Note>
+By default, the server applies `generation_config.json` from the HuggingFace model repository if it exists. To disable this behavior, pass `--generation-config vllm` when launching the server.
+</Note>
+
+## Supported APIs
+
+vLLM implements the following OpenAI-compatible endpoints:
+
+### Standard OpenAI APIs
+
+| API | Endpoint | Description |
+|-----|----------|-------------|
+| [Completions](#completions-api) | `/v1/completions` | Text completion for generative models |
+| [Chat Completions](#chat-completions-api) | `/v1/chat/completions` | Chat-based completions with conversation history |
+| [Responses](#responses-api) | `/v1/responses` | OpenAI Responses API |
+| [Embeddings](#embeddings-api) | `/v1/embeddings` | Generate embeddings for text |
+| [Transcriptions](#transcriptions-api) | `/v1/audio/transcriptions` | Audio-to-text transcription (ASR) |
+| [Translations](#translations-api) | `/v1/audio/translations` | Audio translation |
+| [Realtime](#realtime-api) | `/v1/realtime` | WebSocket-based streaming transcription |
+
+### vLLM Custom APIs
+
+| API | Endpoint | Description |
+|-----|----------|-------------|
+| Tokenizer | `/tokenize`, `/detokenize` | Encode and decode tokens |
+| Pooling | `/pooling` | Extract hidden states from pooling models |
+| Classification | `/classify` | Text classification |
+| Score | `/score` | Sentence similarity scoring |
+| Re-rank | `/rerank`, `/v1/rerank`, `/v2/rerank` | Document re-ranking |
+
+## Completions API
+
+The Completions API generates text based on a prompt:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="token-abc123",
+)
+
+completion = client.completions.create(
+    model="NousResearch/Meta-Llama-3-8B-Instruct",
+    prompt="A robot may not injure a human being",
+    max_tokens=50,
+    temperature=0.7,
+)
+
+print(completion.choices[0].text)
+```
+
+### Streaming completions
+
+```python
+completion = client.completions.create(
+    model="NousResearch/Meta-Llama-3-8B-Instruct",
+    prompt="A robot may not injure a human being",
+    stream=True,
+)
+
+for chunk in completion:
+    print(chunk.choices[0].text, end="", flush=True)
+```
+
+<Warning>
+The `suffix` parameter is not supported in vLLM's Completions API.
+</Warning>
+
+## Chat Completions API
+
+The Chat API supports conversational interactions with chat-tuned models:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="token-abc123",
+)
+
+messages = [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "Who won the world series in 2020?"},
+    {"role": "assistant", "content": "The Los Angeles Dodgers won the World Series in 2020."},
+    {"role": "user", "content": "Where was it played?"},
+]
+
+completion = client.chat.completions.create(
+    model="NousResearch/Meta-Llama-3-8B-Instruct",
+    messages=messages,
+)
+
+print(completion.choices[0].message.content)
+```
+
+### Streaming chat completions
+
+```python
+completion = client.chat.completions.create(
+    model="NousResearch/Meta-Llama-3-8B-Instruct",
+    messages=messages,
+    stream=True,
+)
+
+for chunk in completion:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+```
+
+### Tool calling
+
+vLLM supports function calling and tool usage:
+
+```python
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+
+completion = client.chat.completions.create(
+    model="NousResearch/Meta-Llama-3-8B-Instruct",
+    messages=[{"role": "user", "content": "What's the weather in Boston?"}],
+    tools=tools,
+)
+
+print(completion.choices[0].message.tool_calls)
+```
+
+<Note>
+Set `parallel_tool_calls=false` to ensure vLLM returns at most one tool call per request. The default (`true`) allows multiple tool calls but doesn't guarantee them.
+</Note>
+
+### Chat templates
+
+Models require a chat template to format messages properly. Most models include this in their tokenizer config. For models without one, specify a custom template:
+
+```bash
+vllm serve NousResearch/Meta-Llama-3-8B-Instruct \
+  --chat-template ./path-to-chat-template.jinja
+```
+
+You can also override the content format detection:
+
+```bash
+vllm serve NousResearch/Meta-Llama-3-8B-Instruct \
+  --chat-template-content-format openai
+```
+
+Supported formats:
+- `string` - Simple string content: `"Hello world"`
+- `openai` - List of dictionaries: `[{"type": "text", "text": "Hello world"}]`
+
+## Embeddings API
+
+Generate vector embeddings for text:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="token-abc123",
+)
+
+response = client.embeddings.create(
+    model="BAAI/bge-base-en-v1.5",
+    input="The food was delicious and the waiter was very friendly.",
+)
+
+print(response.data[0].embedding)
+```
+
+### Batch embeddings
+
+```python
+response = client.embeddings.create(
+    model="BAAI/bge-base-en-v1.5",
+    input=[
+        "The food was delicious.",
+        "The service was excellent.",
+        "Great atmosphere!",
+    ],
+)
+
+for item in response.data:
+    print(f"Embedding {item.index}: {item.embedding[:5]}...")  # First 5 dimensions
+```
+
+## Extra parameters
+
+vLLM supports parameters beyond the OpenAI API specification. Pass them via `extra_body` in the Python client:
+
+```python
+completion = client.chat.completions.create(
+    model="NousResearch/Meta-Llama-3-8B-Instruct",
+    messages=[{"role": "user", "content": "Hello!"}],
+    extra_body={
+        "top_k": 50,
+        "repetition_penalty": 1.1,
+        "structured_outputs": {"choice": ["positive", "negative"]},
+    },
+)
+```
+
+For direct HTTP requests, merge them into the JSON payload:
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer token-abc123" \
+  -d '{
+    "model": "NousResearch/Meta-Llama-3-8B-Instruct",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "top_k": 50,
+    "repetition_penalty": 1.1
+  }'
+```
+
+## Server configuration
+
+### Common options
+
+<CodeGroup>
+
+```bash Port and host
+vllm serve meta-llama/Llama-3.2-1B-Instruct \
+  --host 0.0.0.0 \
+  --port 8080
+```
+
+```bash GPU memory
+vllm serve meta-llama/Llama-3.2-1B-Instruct \
+  --gpu-memory-utilization 0.9 \
+  --max-model-len 4096
+```
+
+```bash Tensor parallelism
+vllm serve meta-llama/Llama-70B-Instruct \
+  --tensor-parallel-size 4
+```
+
+```bash Quantization
+vllm serve meta-llama/Llama-3.2-1B-Instruct \
+  --quantization awq \
+  --dtype half
+```
+
+</CodeGroup>
+
+### API security
+
+```bash
+vllm serve meta-llama/Llama-3.2-1B-Instruct \
+  --api-key secret-token \
+  --enable-request-id-headers
+```
+
+Use the API key in requests:
+
+```python
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="secret-token",
+)
+```
+
+### Request ID tracking
+
+Enable request ID headers for tracing:
+
+```python
+completion = client.chat.completions.create(
+    model="NousResearch/Meta-Llama-3-8B-Instruct",
+    messages=[{"role": "user", "content": "Hello!"}],
+    extra_headers={"x-request-id": "my-request-123"},
+)
+
+print(completion._request_id)  # "my-request-123"
+```
+
+### Offline documentation
+
+For air-gapped environments, enable offline API docs:
+
+```bash
+vllm serve meta-llama/Llama-3.2-1B-Instruct \
+  --enable-offline-docs
+```
+
+Access the docs at `http://localhost:8000/docs`.
+
+## Multi-modal inputs
+
+vLLM supports vision and audio inputs for compatible models:
+
+```python
+completion = client.chat.completions.create(
+    model="llava-hf/llava-1.5-7b-hf",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/image.jpg"},
+                },
+            ],
+        }
+    ],
+)
+```
+
+<Note>
+The `image_url.detail` parameter is not currently supported.
+</Note>
+
+## Transcriptions API
+
+Transcribe audio files to text using ASR models:
+
+<Note>
+Requires installing audio dependencies: `pip install vllm[audio]`
+</Note>
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="token-abc123",
+)
+
+with open("audio.mp3", "rb") as audio_file:
+    transcription = client.audio.transcriptions.create(
+        model="openai/whisper-large-v3-turbo",
+        file=audio_file,
+        language="en",
+        response_format="verbose_json",
+    )
+
+print(transcription.text)
+```
+
+Supported audio formats: FLAC, MP3, MP4, MPEG, MPGA, M4A, OGG, WAV, WEBM
+
+### With curl
+
+```bash
+curl -X POST "http://localhost:8000/v1/audio/transcriptions" \
+  -H "Authorization: Bearer token-abc123" \
+  -F "file=@audio.mp3" \
+  -F "model=openai/whisper-large-v3-turbo" \
+  -F "language=en" \
+  -F "response_format=verbose_json"
+```
+
+## Performance tuning
+
+<Tabs>
+  <Tab title="Batch size">
+    ```bash
+    vllm serve meta-llama/Llama-3.2-1B-Instruct \
+      --max-num-batched-tokens 8192 \
+      --max-num-seqs 256
+    ```
+  </Tab>
+  <Tab title="KV cache">
+    ```bash
+    vllm serve meta-llama/Llama-3.2-1B-Instruct \
+      --enable-prefix-caching \
+      --gpu-memory-utilization 0.95
+    ```
+  </Tab>
+  <Tab title="Speculative decoding">
+    ```bash
+    vllm serve meta-llama/Llama-70B-Instruct \
+      --speculative-model meta-llama/Llama-7B \
+      --num-speculative-tokens 5
+    ```
+  </Tab>
+</Tabs>
+
+## Docker deployment
+
+Run vLLM server in a container:
+
+```bash
+docker run --runtime nvidia --gpus all \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -p 8000:8000 \
+  --ipc=host \
+  vllm/vllm-openai:latest \
+  --model NousResearch/Meta-Llama-3-8B-Instruct \
+  --dtype auto
+```
+
+For more deployment options, see [Docker deployment](/deployment/docker).
+
+## Ray Serve integration
+
+For production-scale deployments with autoscaling and load balancing, use Ray Serve:
+
+```python
+from ray import serve
+from vllm.engine.arg_utils import AsyncEngineArgs
+from vllm.entrypoints.openai.api_server import build_app
+
+@serve.deployment
+class VLLMDeployment:
+    def __init__(self, model: str):
+        engine_args = AsyncEngineArgs(model=model)
+        self.app = build_app(engine_args)
+    
+    async def __call__(self, request):
+        return await self.app(request)
+
+deployment = VLLMDeployment.bind(model="meta-llama/Llama-3.2-1B-Instruct")
+serve.run(deployment)
+```
+
+Learn more in the [Ray Serve LLM documentation](https://docs.ray.io/en/latest/serve/llm/index.html).
+
+## API reference
+
+For complete API specifications and all supported parameters, see:
+
+- [Configuration reference](/configuration/serve-args)
+- [Sampling parameters](/api/sampling-params)
+- [Engine arguments](/api/engine-args)

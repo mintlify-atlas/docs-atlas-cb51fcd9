@@ -1,0 +1,173 @@
+---
+title: PoolingParams
+description: Configure pooling parameters for embeddings and classification tasks
+---
+
+The `PoolingParams` class controls how vLLM performs pooling operations for embeddings, classification, and scoring tasks.
+
+## Constructor
+
+```python
+from vllm import PoolingParams
+
+pooling_params = PoolingParams(
+    use_activation=True,
+    dimensions=768,
+)
+```
+
+## Parameters
+
+<ParamField path="use_activation" type="bool | None" default="None">
+  Whether to apply activation function to pooler outputs. None uses the model's default (typically True).
+</ParamField>
+
+<ParamField path="dimensions" type="int | None" default="None">
+  Reduce embedding dimensions if the model supports matryoshka representation. Only valid for embedding tasks.
+</ParamField>
+
+<ParamField path="task" type="str | None" default="None">
+  The pooling task to perform. Should be one of:
+  - `"embed"` - Generate embeddings
+  - `"classify"` - Classification task
+  - `"score"` - Scoring/ranking task
+  - `"token_embed"` - Token-level embeddings
+  - `"token_classify"` - Token-level classification
+</ParamField>
+
+## Task-specific parameters
+
+Different pooling tasks support different parameters:
+
+### Embedding tasks (`embed`, `token_embed`)
+
+- `use_activation`: Whether to apply activation
+- `dimensions`: Output dimensionality (if model supports matryoshka)
+
+### Classification tasks (`classify`, `token_classify`)
+
+- `use_activation`: Whether to apply activation
+
+### Scoring task (`score`)
+
+- `use_activation`: Whether to apply activation
+
+## Example: Generate embeddings
+
+```python
+from vllm import LLM, PoolingParams
+
+# Initialize embedding model
+llm = LLM(
+    model="sentence-transformers/all-MiniLM-L6-v2",
+    runner="pooling",
+)
+
+# Configure pooling
+pooling_params = PoolingParams(
+    use_activation=True,
+)
+
+# Generate embeddings
+prompts = [
+    "Hello world",
+    "How are you?",
+]
+
+outputs = llm.embed(prompts, pooling_params=pooling_params)
+
+for output in outputs:
+    embedding = output.outputs.embedding
+    print(f"Embedding dimension: {len(embedding)}")
+    print(f"Embedding: {embedding[:5]}...")  # First 5 values
+```
+
+## Example: Matryoshka embeddings
+
+```python
+# Reduce embedding dimensions for a matryoshka model
+pooling_params = PoolingParams(
+    use_activation=True,
+    dimensions=256,  # Reduce from default (e.g., 768) to 256
+)
+
+outputs = llm.embed(["Sample text"], pooling_params=pooling_params)
+embedding = outputs[0].outputs.embedding
+assert len(embedding) == 256
+```
+
+## Example: Classification
+
+```python
+from vllm import LLM, PoolingParams
+
+# Initialize classification model
+llm = LLM(
+    model="your-classifier-model",
+    runner="pooling",
+)
+
+pooling_params = PoolingParams(
+    use_activation=True,
+)
+
+# Classify text
+outputs = llm.classify(
+    ["This movie is amazing!"],
+    pooling_params=pooling_params,
+)
+
+for output in outputs:
+    probs = output.outputs.probs
+    print(f"Classification probabilities: {probs}")
+```
+
+## Example: Scoring/Reranking
+
+```python
+# Score query-document pairs
+llm = LLM(
+    model="your-reranker-model",
+    runner="pooling",
+)
+
+pooling_params = PoolingParams(
+    use_activation=True,
+)
+
+query = "What is machine learning?"
+documents = [
+    "Machine learning is a subset of AI",
+    "Python is a programming language",
+    "Deep learning uses neural networks",
+]
+
+# Create query-document pairs
+pairs = [f"{query} [SEP] {doc}" for doc in documents]
+
+outputs = llm.score(pairs, pooling_params=pooling_params)
+
+for i, output in enumerate(outputs):
+    score = output.outputs.score
+    print(f"Document {i} score: {score}")
+```
+
+## Valid parameter combinations
+
+The `PoolingParams` class validates that only task-appropriate parameters are specified:
+
+| Task | Valid Parameters |
+|------|------------------|
+| `embed` | `use_activation`, `dimensions` |
+| `classify` | `use_activation` |
+| `score` | `use_activation` |
+| `token_embed` | `use_activation`, `dimensions` |
+| `token_classify` | `use_activation` |
+
+Attempting to use invalid parameters for a task will raise a validation error.
+
+## Related
+
+- [LLM](/api/llm) - Use PoolingParams with `llm.embed()`, `llm.classify()`, or `llm.score()`
+- [SamplingParams](/api/sampling-params) - Parameters for text generation
+- [Output classes](/api/outputs) - Output formats for pooling tasks

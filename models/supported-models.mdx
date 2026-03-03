@@ -1,0 +1,168 @@
+---
+title: Supported models
+description: Complete list of model architectures and tasks supported by vLLM
+---
+
+vLLM supports generative and pooling models across various tasks. For each task, we list the model architectures that have been implemented in vLLM alongside popular models that use them.
+
+## Model categories
+
+vLLM organizes models into three main categories:
+
+<CardGroup cols={3}>
+  <Card title="Generative models" icon="message-lines" href="/models/generative-models">
+    Text generation, chat, and multimodal language models
+  </Card>
+  <Card title="Multimodal models" icon="images" href="/models/multimodal-models">
+    Vision-language, audio, and video models
+  </Card>
+  <Card title="Pooling models" icon="layer-group" href="/models/pooling-models">
+    Embedding, classification, and reward models
+  </Card>
+</CardGroup>
+
+## Model implementation
+
+### Native vLLM support
+
+If vLLM natively supports a model, its implementation can be found in `vllm/model_executor/models/`. These models are listed in the supported model tables and typically offer the best performance.
+
+### Transformers modeling backend
+
+vLLM also supports model implementations available in Transformers. You should expect the performance of a Transformers model implementation used in vLLM to be within 5% of a dedicated vLLM implementation.
+
+<Note>
+The Transformers modeling backend works for:
+- **Modalities**: Embedding models, language models, and vision-language models
+- **Architectures**: Encoder-only, decoder-only, mixture-of-experts
+- **Attention types**: Full attention and/or sliding attention
+</Note>
+
+To check if the modeling backend is Transformers:
+
+```python
+from vllm import LLM
+llm = LLM(model="...")  # Name or path of your model
+llm.apply_model(lambda model: print(type(model)))
+```
+
+If the printed type starts with `Transformers...`, it's using the Transformers implementation.
+
+To force the Transformers backend:
+
+```python
+# Offline inference
+llm = LLM(model="your-model", model_impl="transformers")
+
+# Online serving
+vllm serve your-model --model-impl transformers
+```
+
+### Plugin support
+
+Some model architectures are supported via vLLM plugins:
+
+| Architecture | Models | Plugin Repository |
+|--------------|--------|-------------------|
+| `BartForConditionalGeneration` | BART | [bart-plugin](https://github.com/vllm-project/bart-plugin) |
+| `Florence2ForConditionalGeneration` | Florence-2 | [bart-plugin](https://github.com/vllm-project/bart-plugin) |
+
+For other encoder-decoder models not natively supported, we recommend implementing support through the [plugin system](/design/plugin-system).
+
+## Loading models
+
+### From Hugging Face Hub
+
+By default, vLLM loads models from [Hugging Face Hub](https://huggingface.co/models). To change the download path, set the `HF_HOME` environment variable.
+
+To check if a model is natively supported, look at the `architectures` field in the model's `config.json`. If it matches an architecture in the supported model tables, it should work natively.
+
+<Accordion title="Test if your model is supported">
+  The easiest way to check if your model works at runtime:
+
+  ```python
+  from vllm import LLM
+
+  # For generative models
+  llm = LLM(model="...", runner="generate")
+  output = llm.generate("Hello, my name is")
+  print(output)
+
+  # For pooling models
+  llm = LLM(model="...", runner="pooling")
+  output = llm.encode("Hello, my name is")
+  print(output)
+  ```
+
+  If vLLM successfully returns output, your model is supported.
+</Accordion>
+
+<Accordion title="Download models manually">
+  Use the Hugging Face CLI to download models:
+
+  ```bash
+  # Download a model
+  hf download HuggingFaceH4/zephyr-7b-beta
+
+  # Specify custom cache directory
+  hf download HuggingFaceH4/zephyr-7b-beta --cache-dir ./path/to/cache
+
+  # Download specific file
+  hf download HuggingFaceH4/zephyr-7b-beta eval_results.json
+  ```
+
+  List downloaded models:
+
+  ```bash
+  hf scan-cache
+  hf scan-cache -v  # verbose output
+  ```
+
+  Delete cached models:
+
+  ```bash
+  hf delete-cache
+  ```
+</Accordion>
+
+### From ModelScope
+
+To use models from [ModelScope](https://www.modelscope.cn):
+
+```bash
+export VLLM_USE_MODELSCOPE=True
+```
+
+```python
+from vllm import LLM
+
+llm = LLM(model="...", trust_remote_code=True)
+output = llm.generate("Hello, my name is")
+print(output)
+```
+
+## Feature status legend
+
+Throughout the model tables:
+
+- ✅ Feature is fully supported
+- 🚧 Feature is planned but not yet supported
+- ⚠️ Feature is available but may have known issues or limitations
+- (blank) Feature status is unknown or not applicable
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Generative models" icon="robot" href="/models/generative-models">
+    Explore text and multimodal generation models
+  </Card>
+  <Card title="Pooling models" icon="cube" href="/models/pooling-models">
+    Learn about embedding and classification models
+  </Card>
+  <Card title="Quantization" icon="compress" href="/models/quantization">
+    Reduce model size with quantization
+  </Card>
+  <Card title="Add a model" icon="plus" href="/contributing/adding-models">
+    Contribute support for new models
+  </Card>
+</CardGroup>

@@ -1,0 +1,238 @@
+---
+title: Model registration
+description: Register your model with vLLM's model registry
+---
+
+vLLM relies on a model registry to determine how to run each model. This page provides detailed instructions on how to register your model.
+
+A list of pre-registered architectures can be found in the [supported models documentation](/models/supported-models).
+
+## Registration options
+
+There are two ways to register a model with vLLM:
+
+1. **Built-in models**: Add your model directly to the vLLM library
+2. **Out-of-tree models**: Load an external model using a plugin
+
+## Built-in models
+
+To add a model directly to the vLLM library:
+
+<Steps>
+  <Step title="Fork and build vLLM">
+    Start by forking the [GitHub repository](https://github.com/vllm-project/vllm) and then [build it from source](/getting-started/installation/gpu#build-wheel-from-source).
+
+    This gives you the ability to modify the codebase and test your model.
+  </Step>
+
+  <Step title="Implement your model">
+    After implementing your model (see [adding models guide](/contributing/adding-models)), place it in the `vllm/model_executor/models` directory.
+  </Step>
+
+  <Step title="Register in model registry">
+    Add your model class to `_VLLM_MODELS` in `vllm/model_executor/models/registry.py` so that it is automatically registered upon importing vLLM:
+
+    ```python vllm/model_executor/models/registry.py
+    _VLLM_MODELS = {
+        "AquilaForCausalLM": "aquila",
+        "BaiChuanForCausalLM": "baichuan",
+        # ... other models ...
+        "YourModelForCausalLM": "your_model",  # Add your model here
+    }
+    ```
+  </Step>
+
+  <Step title="Update documentation">
+    Update the [list of supported models](/models/supported-models) to promote your model.
+
+    <Note>
+      The list of models in each section should be maintained in **alphabetical order**.
+    </Note>
+  </Step>
+</Steps>
+
+## Out-of-tree models
+
+You can load an external model using a plugin without modifying the vLLM codebase. This is useful for:
+
+- Proprietary models that cannot be open-sourced
+- Experimental models still under development
+- Custom modifications to existing models
+
+### Creating a plugin
+
+<Steps>
+  <Step title="Create plugin structure">
+    Create a Python package with the following structure:
+
+    ```
+    my_vllm_plugin/
+    ├── my_vllm_plugin/
+    │   ├── __init__.py
+    │   └── my_model.py
+    └── setup.py
+    ```
+  </Step>
+
+  <Step title="Implement the model">
+    In `my_vllm_plugin/my_model.py`, implement your model:
+
+    ```python my_vllm_plugin/my_model.py
+    import torch.nn as nn
+    from vllm.config import VllmConfig
+
+    class YourModelForCausalLM(nn.Module):
+        def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
+            super().__init__()
+            # Your model implementation
+            ...
+    ```
+  </Step>
+
+  <Step title="Create registration function">
+    In `my_vllm_plugin/__init__.py`, create the registration entry point:
+
+    <CodeGroup>
+    ```python Direct import (simple)
+    # The entrypoint of your plugin
+    def register():
+        from vllm import ModelRegistry
+        from my_vllm_plugin.my_model import YourModelForCausalLM
+
+        ModelRegistry.register_model(
+            "YourModelForCausalLM",
+            YourModelForCausalLM
+        )
+    ```
+
+    ```python Lazy import (recommended)
+    # Use lazy import if your model imports modules that initialize CUDA
+    # This avoids "RuntimeError: Cannot re-initialize CUDA in forked subprocess"
+    def register():
+        from vllm import ModelRegistry
+
+        ModelRegistry.register_model(
+            "YourModelForCausalLM",
+            "my_vllm_plugin.my_model:YourModelForCausalLM",
+        )
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Configure setup.py">
+    In `setup.py`, register the plugin entry point:
+
+    ```python setup.py
+    from setuptools import setup, find_packages
+
+    setup(
+        name="my_vllm_plugin",
+        version="0.1.0",
+        packages=find_packages(),
+        entry_points={
+            "vllm.general_plugins": [
+                "register_my_model = my_vllm_plugin:register"
+            ]
+        },
+    )
+    ```
+  </Step>
+
+  <Step title="Install the plugin">
+    Install your plugin package:
+
+    ```bash
+    pip install -e ./my_vllm_plugin
+    ```
+  </Step>
+
+  <Step title="Use your model">
+    Your model will now be automatically discovered and registered by vLLM:
+
+    ```python
+    from vllm import LLM
+
+    # vLLM automatically loads your plugin
+    llm = LLM(model="path/to/your/model")
+    ```
+  </Step>
+</Steps>
+
+### Multimodal models
+
+If your model is a multimodal model, ensure the model class implements the `SupportsMultiModal` interface:
+
+```python
+from vllm.model_executor.models.interfaces import SupportsMultiModal
+
+class YourModelForImage2Seq(nn.Module, SupportsMultiModal):
+    ...
+```
+
+Read more about multimodal support in the [multimodal guide](/contributing/multimodal-support).
+
+## Plugin system details
+
+vLLM's plugin system uses the standard Python `entry_points` mechanism. Every plugin has three parts:
+
+1. **Plugin group**: The name of the entry point group (e.g., `vllm.general_plugins`)
+2. **Plugin name**: The name of the plugin (e.g., `register_my_model`)
+3. **Plugin value**: The fully qualified name of the function or module to register
+
+For more information on plugins, see the [plugin system design](/design/plugin-system).
+
+## Example: Complete plugin
+
+Here's a complete example of a plugin that registers a custom model:
+
+<CodeGroup>
+```python setup.py
+from setuptools import setup, find_packages
+
+setup(
+    name="vllm_custom_llama",
+    version="0.1.0",
+    packages=find_packages(),
+    install_requires=[
+        "vllm>=0.4.0",
+    ],
+    entry_points={
+        "vllm.general_plugins": [
+            "register_custom_llama = vllm_custom_llama:register"
+        ]
+    },
+)
+```
+
+```python vllm_custom_llama/__init__.py
+def register():
+    from vllm import ModelRegistry
+
+    ModelRegistry.register_model(
+        "CustomLlamaForCausalLM",
+        "vllm_custom_llama.modeling:CustomLlamaForCausalLM",
+    )
+```
+
+```python vllm_custom_llama/modeling.py
+import torch.nn as nn
+from vllm.config import VllmConfig
+
+class CustomLlamaForCausalLM(nn.Module):
+    def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
+        super().__init__()
+        # Your custom implementation
+        ...
+```
+</CodeGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Testing guide" icon="flask" href="/contributing/testing">
+    Write tests to verify your model
+  </Card>
+  <Card title="Plugin system" icon="puzzle-piece" href="/design/plugin-system">
+    Learn more about the plugin system
+  </Card>
+</CardGroup>

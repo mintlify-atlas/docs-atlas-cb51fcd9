@@ -1,0 +1,251 @@
+---
+title: Completions API
+description: REST API endpoint for text completions
+---
+
+The completions endpoint generates text based on a prompt. It follows the OpenAI Completions API format.
+
+## Endpoint
+
+```
+POST /v1/completions
+```
+
+## Request body
+
+<ParamField path="model" type="string" required>
+  The model to use for completion. Use the model name from `/v1/models`.
+</ParamField>
+
+<ParamField path="prompt" type="string | array" required>
+  The prompt(s) to generate completions for. Can be:
+  - A string: `"Once upon a time"`
+  - An array of strings: `["Hello", "World"]`
+  - Token IDs: `[123, 456, 789]`
+  - Array of token ID arrays: `[[123, 456], [789, 012]]`
+</ParamField>
+
+<ParamField path="max_tokens" type="integer" default="16">
+  Maximum number of tokens to generate.
+</ParamField>
+
+<ParamField path="temperature" type="number" default="1.0">
+  Sampling temperature between 0 and 2. Higher values make output more random.
+</ParamField>
+
+<ParamField path="top_p" type="number" default="1.0">
+  Nucleus sampling threshold. Only tokens with cumulative probability ≤ top_p are considered.
+</ParamField>
+
+<ParamField path="n" type="integer" default="1">
+  Number of completions to generate for each prompt.
+</ParamField>
+
+<ParamField path="stream" type="boolean" default="false">
+  Whether to stream partial results as they're generated.
+</ParamField>
+
+<ParamField path="logprobs" type="integer | null" default="null">
+  Include the log probabilities of the top N tokens. Set to 0 to disable, or a positive integer.
+</ParamField>
+
+<ParamField path="echo" type="boolean" default="false">
+  Whether to echo the prompt in the completion.
+</ParamField>
+
+<ParamField path="stop" type="string | array" default="null">
+  Up to 4 sequences where generation will stop.
+</ParamField>
+
+<ParamField path="presence_penalty" type="number" default="0.0">
+  Penalty for tokens that have already appeared. Range: [-2.0, 2.0].
+</ParamField>
+
+<ParamField path="frequency_penalty" type="number" default="0.0">
+  Penalty for tokens based on their frequency. Range: [-2.0, 2.0].
+</ParamField>
+
+<ParamField path="logit_bias" type="object" default="null">
+  Modify likelihood of specified tokens. Maps token IDs to bias values [-100, 100].
+</ParamField>
+
+<ParamField path="seed" type="integer" default="null">
+  Random seed for deterministic sampling.
+</ParamField>
+
+### vLLM-specific parameters
+
+<ParamField path="top_k" type="integer" default="-1">
+  Number of highest probability tokens to keep. -1 means disabled.
+</ParamField>
+
+<ParamField path="min_p" type="number" default="0.0">
+  Minimum probability threshold relative to most likely token.
+</ParamField>
+
+<ParamField path="repetition_penalty" type="number" default="1.0">
+  Penalty for token repetition. Values > 1 discourage repetition.
+</ParamField>
+
+<ParamField path="stop_token_ids" type="array" default="[]">
+  List of token IDs that will stop generation.
+</ParamField>
+
+<ParamField path="ignore_eos" type="boolean" default="false">
+  Whether to ignore the end-of-sequence token.
+</ParamField>
+
+<ParamField path="use_beam_search" type="boolean" default="false">
+  Whether to use beam search instead of sampling.
+</ParamField>
+
+## Response format
+
+### Non-streaming response
+
+<ResponseField name="id" type="string">
+  Unique identifier for the completion.
+</ResponseField>
+
+<ResponseField name="object" type="string">
+  Always "text_completion".
+</ResponseField>
+
+<ResponseField name="created" type="integer">
+  Unix timestamp of when the completion was created.
+</ResponseField>
+
+<ResponseField name="model" type="string">
+  The model used for completion.
+</ResponseField>
+
+<ResponseField name="choices" type="array">
+  Array of completion choices.
+  
+  <ResponseField name="index" type="integer">
+    Index of the choice.
+  </ResponseField>
+  
+  <ResponseField name="text" type="string">
+    The generated text.
+  </ResponseField>
+  
+  <ResponseField name="logprobs" type="object | null">
+    Log probability information, if requested.
+  </ResponseField>
+  
+  <ResponseField name="finish_reason" type="string">
+    Why generation stopped: "stop", "length", or "abort".
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="usage" type="object">
+  Token usage statistics.
+  
+  <ResponseField name="prompt_tokens" type="integer">
+    Number of tokens in the prompt.
+  </ResponseField>
+  
+  <ResponseField name="completion_tokens" type="integer">
+    Number of tokens in the completion.
+  </ResponseField>
+  
+  <ResponseField name="total_tokens" type="integer">
+    Total tokens used.
+  </ResponseField>
+</ResponseField>
+
+## Example: Basic completion
+
+```bash
+curl http://localhost:8000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "facebook/opt-125m",
+    "prompt": "San Francisco is a",
+    "max_tokens": 50,
+    "temperature": 0.7
+  }'
+```
+
+```json
+{
+  "id": "cmpl-abc123",
+  "object": "text_completion",
+  "created": 1677652288,
+  "model": "facebook/opt-125m",
+  "choices": [
+    {
+      "index": 0,
+      "text": " city in Northern California, known for its...",
+      "logprobs": null,
+      "finish_reason": "length"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 5,
+    "completion_tokens": 50,
+    "total_tokens": 55
+  }
+}
+```
+
+## Example: Streaming completion
+
+```bash
+curl http://localhost:8000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "facebook/opt-125m",
+    "prompt": "Once upon a time",
+    "max_tokens": 100,
+    "stream": true
+  }'
+```
+
+Streaming returns Server-Sent Events:
+
+```
+data: {"id":"cmpl-123","object":"text_completion","created":1677652288,"choices":[{"index":0,"text":" there","logprobs":null,"finish_reason":null}],"model":"facebook/opt-125m"}
+
+data: {"id":"cmpl-123","object":"text_completion","created":1677652288,"choices":[{"index":0,"text":" was","logprobs":null,"finish_reason":null}],"model":"facebook/opt-125m"}
+
+data: {"id":"cmpl-123","object":"text_completion","created":1677652288,"choices":[{"index":0,"text":"","logprobs":null,"finish_reason":"stop"}],"model":"facebook/opt-125m"}
+
+data: [DONE]
+```
+
+## Example: Multiple completions
+
+```bash
+curl http://localhost:8000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "facebook/opt-125m",
+    "prompt": "The best programming language is",
+    "max_tokens": 20,
+    "n": 3,
+    "temperature": 0.9
+  }'
+```
+
+Returns 3 different completions in the `choices` array.
+
+## Example: With logprobs
+
+```bash
+curl http://localhost:8000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "facebook/opt-125m",
+    "prompt": "Hello",
+    "max_tokens": 5,
+    "logprobs": 3
+  }'
+```
+
+## Related
+
+- [Chat completions](/api/rest/chat) - For conversational models
+- [Models endpoint](/api/rest/models) - List available models
+- [SamplingParams](/api/sampling-params) - Python API equivalent

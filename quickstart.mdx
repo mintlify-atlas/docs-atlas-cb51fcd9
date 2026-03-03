@@ -1,80 +1,354 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get started with vLLM for offline inference and online serving
 ---
 
-## Get started in three steps
+This guide will help you quickly get started with vLLM to perform offline batched inference and deploy an OpenAI-compatible API server.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+<CardGroup cols={2}>
+  <Card title="Operating system" icon="linux">
+    Linux (including WSL on Windows)
+  </Card>
+  <Card title="Python version" icon="python">
+    Python 3.10, 3.11, 3.12, or 3.13
+  </Card>
+</CardGroup>
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+## Installation
 
-### Step 2: Deploy your changes
+Choose your hardware platform for installation instructions:
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+<Tabs>
+  <Tab title="NVIDIA CUDA">
+    If you are using NVIDIA GPUs, you can install vLLM using [pip](https://pypi.org/project/vllm/) directly.
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    It's recommended to use [uv](https://docs.astral.sh/uv/), a very fast Python environment manager. Install `uv` and create a new environment:
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash
+    uv venv --python 3.12 --seed
+    source .venv/bin/activate
+    uv pip install vllm --torch-backend=auto
+    ```
 
-### Step 3: Go live
+    <Tip>
+      `uv` can automatically select the appropriate PyTorch index by inspecting your CUDA driver version with `--torch-backend=auto`. To select a specific backend (e.g., `cu126`), use `--torch-backend=cu126`.
+    </Tip>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    You can also run vLLM commands without creating a permanent environment:
+
+    ```bash
+    uv run --with vllm vllm --help
+    ```
+
+    <Note>
+      If you prefer conda, you can also use it to manage environments:
+      ```bash
+      conda create -n myenv python=3.12 -y
+      conda activate myenv
+      pip install --upgrade uv
+      uv pip install vllm --torch-backend=auto
+      ```
+    </Note>
+  </Tab>
+
+  <Tab title="AMD ROCm">
+    For AMD GPUs, install vLLM using the ROCm wheel index:
+
+    ```bash
+    uv venv --python 3.12 --seed
+    source .venv/bin/activate
+    uv pip install vllm --extra-index-url https://wheels.vllm.ai/rocm/
+    ```
+
+    <Warning>
+      Currently supports Python 3.12, ROCm 7.0, and `glibc >= 2.35`.
+    </Warning>
+  </Tab>
+
+  <Tab title="Google TPU">
+    To run vLLM on Google TPUs, install the `vllm-tpu` package:
+
+    ```bash
+    uv pip install vllm-tpu
+    ```
+
+    <Note>
+      For more detailed TPU instructions including Docker and troubleshooting, see the [vLLM on TPU documentation](https://docs.vllm.ai/projects/tpu/en/latest/).
+    </Note>
+  </Tab>
+</Tabs>
+
+For more installation options and other platforms, see the [Installation Guide](/installation).
+
+## Offline batched inference
+
+With vLLM installed, you can start generating text for a list of input prompts (offline batch inference).
+
+### Basic usage
+
+The core classes you'll use are:
+
+- `LLM` - Main class for running offline inference with the vLLM engine
+- `SamplingParams` - Parameters for the sampling process
+
+```python
+from vllm import LLM, SamplingParams
+```
+
+### Define prompts and sampling parameters
+
+Create a list of input prompts and configure sampling parameters:
+
+```python
+prompts = [
+    "Hello, my name is",
+    "The president of the United States is",
+    "The capital of France is",
+    "The future of AI is",
+]
+sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
+```
+
+<Note>
+  By default, vLLM uses sampling parameters from the model's `generation_config.json` on HuggingFace if it exists. This provides optimal results recommended by the model creator.
+  
+  To use vLLM's default sampling parameters instead, set `generation_config="vllm"` when creating the LLM instance.
+</Note>
+
+### Initialize the LLM engine
+
+Create an LLM instance with your chosen model:
+
+```python
+llm = LLM(model="facebook/opt-125m")
+```
+
+<Tip>
+  By default, vLLM downloads models from [HuggingFace](https://huggingface.co/). To use models from [ModelScope](https://www.modelscope.cn), set the environment variable:
+  ```bash
+  export VLLM_USE_MODELSCOPE=True
+  ```
+</Tip>
+
+### Generate outputs
+
+Generate text for all prompts with high throughput:
+
+```python
+outputs = llm.generate(prompts, sampling_params)
+
+for output in outputs:
+    prompt = output.prompt
+    generated_text = output.outputs[0].text
+    print(f"Prompt: {prompt!r}, Generated text: {generated_text!r}")
+```
+
+<Warning>
+  The `llm.generate` method does not automatically apply chat templates. For Instruct or Chat models, manually apply the template or use the `llm.chat` method:
+</Warning>
+
+<CodeGroup>
+```python Manual template
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("/path/to/chat_model")
+messages_list = [
+    [{"role": "user", "content": prompt}]
+    for prompt in prompts
+]
+texts = tokenizer.apply_chat_template(
+    messages_list,
+    tokenize=False,
+    add_generation_prompt=True,
+)
+
+outputs = llm.generate(texts, sampling_params)
+```
+
+```python Chat interface
+outputs = llm.chat(messages_list, sampling_params)
+for idx, output in enumerate(outputs):
+    prompt = prompts[idx]
+    generated_text = output.outputs[0].text
+    print(f"Prompt: {prompt!r}, Generated text: {generated_text!r}")
+```
+</CodeGroup>
+
+### Complete example
+
+See the full working example at: `examples/offline_inference/basic/basic.py`
+
+## OpenAI-compatible server
+
+vLLM can be deployed as a server implementing the OpenAI API protocol, allowing it to be a drop-in replacement for OpenAI API applications.
+
+### Start the server
+
+Launch the vLLM server with a model:
+
+```bash
+vllm serve Qwen/Qwen2.5-1.5B-Instruct
+```
+
+By default, the server:
+- Starts at `http://localhost:8000`
+- Hosts one model at a time
+- Implements OpenAI-compatible endpoints
+
+<Tip>
+  Use `--host` and `--port` to customize the server address:
+  ```bash
+  vllm serve Qwen/Qwen2.5-1.5B-Instruct --host 0.0.0.0 --port 8080
+  ```
+</Tip>
+
+<Note>
+  By default, the server applies `generation_config.json` from the HuggingFace model repository. To disable this and use vLLM defaults, pass:
+  ```bash
+  vllm serve Qwen/Qwen2.5-1.5B-Instruct --generation-config vllm
+  ```
+</Note>
+
+### API authentication
+
+Enable API key checking:
+
+```bash
+vllm serve Qwen/Qwen2.5-1.5B-Instruct --api-key sk-key1 --api-key sk-key2
+```
+
+Or use environment variable:
+
+```bash
+export VLLM_API_KEY="sk-your-key"
+vllm serve Qwen/Qwen2.5-1.5B-Instruct
+```
+
+### Query the server
+
+List available models:
+
+```bash
+curl http://localhost:8000/v1/models
+```
+
+### Completions API
+
+Generate completions using the `/v1/completions` endpoint:
+
+<CodeGroup>
+```bash cURL
+curl http://localhost:8000/v1/completions \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "Qwen/Qwen2.5-1.5B-Instruct",
+        "prompt": "San Francisco is a",
+        "max_tokens": 7,
+        "temperature": 0
+    }'
+```
+
+```python Python (OpenAI SDK)
+from openai import OpenAI
+
+# Configure client to use vLLM server
+client = OpenAI(
+    api_key="EMPTY",
+    base_url="http://localhost:8000/v1",
+)
+
+completion = client.completions.create(
+    model="Qwen/Qwen2.5-1.5B-Instruct",
+    prompt="San Francisco is a",
+)
+print("Completion result:", completion)
+```
+</CodeGroup>
+
+### Chat completions API
+
+The chat interface enables dynamic, back-and-forth exchanges:
+
+<CodeGroup>
+```bash cURL
+curl http://localhost:8000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "Qwen/Qwen2.5-1.5B-Instruct",
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Who won the world series in 2020?"}
+        ]
+    }'
+```
+
+```python Python (OpenAI SDK)
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="EMPTY",
+    base_url="http://localhost:8000/v1",
+)
+
+chat_response = client.chat.completions.create(
+    model="Qwen/Qwen2.5-1.5B-Instruct",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Tell me a joke."},
+    ],
+)
+print("Chat response:", chat_response)
+```
+</CodeGroup>
+
+## Attention backends
+
+vLLM automatically selects the most performant attention backend for your system. You can manually specify a backend:
+
+<Tabs>
+  <Tab title="Online serving">
+    ```bash
+    vllm serve Qwen/Qwen2.5-1.5B-Instruct --attention-backend FLASH_ATTN
+    ```
+  </Tab>
+  
+  <Tab title="Offline inference">
+    ```python
+    python script.py --attention-backend FLASHINFER
+    ```
+  </Tab>
+</Tabs>
+
+### Available backends
+
+<CardGroup cols={2}>
+  <Card title="NVIDIA CUDA" icon="nvidia">
+    `FLASH_ATTN` or `FLASHINFER`
+  </Card>
+  <Card title="AMD ROCm" icon="microchip">
+    `TRITON_ATTN`, `ROCM_ATTN`, `ROCM_AITER_FA`, `ROCM_AITER_UNIFIED_ATTN`, `TRITON_MLA`, `ROCM_AITER_MLA`, or `ROCM_AITER_TRITON_MLA`
+  </Card>
+</CardGroup>
+
+<Warning>
+  Flash Infer is not included in pre-built wheels. Install it separately following the [Flash Infer documentation](https://docs.flashinfer.ai/).
+</Warning>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Installation guide" icon="download" href="/installation">
+    Detailed installation for all platforms
+  </Card>
+  <Card title="Supported models" icon="list" href="/models/supported-models">
+    Browse all compatible models
+  </Card>
+  <Card title="API reference" icon="code" href="/api/llm">
+    Explore complete API documentation
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/engine-args">
+    Learn about advanced configuration options
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

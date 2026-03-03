@@ -1,0 +1,261 @@
+---
+title: Embeddings API
+description: REST API endpoint for generating text embeddings
+---
+
+The embeddings endpoint generates vector representations of text inputs. It follows the OpenAI Embeddings API format.
+
+## Endpoint
+
+```
+POST /v1/embeddings
+```
+
+## Request body
+
+<ParamField path="model" type="string" required>
+  The embedding model to use. Use a model name from `/v1/models` that supports embeddings.
+</ParamField>
+
+<ParamField path="input" type="string | array" required>
+  The input text(s) to embed. Can be:
+  - A single string: `"Hello world"`
+  - An array of strings: `["Hello", "World"]`
+  - Token IDs: `[123, 456, 789]`
+  - Array of token ID arrays: `[[123, 456], [789, 012]]`
+</ParamField>
+
+<ParamField path="encoding_format" type="string" default="float">
+  The format to return embeddings in:
+  - `"float"`: Array of floating-point numbers
+  - `"base64"`: Base64-encoded string
+</ParamField>
+
+<ParamField path="dimensions" type="integer" default="null">
+  Number of dimensions for the embedding output. Only supported for models with matryoshka representation.
+</ParamField>
+
+### vLLM-specific parameters
+
+<ParamField path="truncate_prompt_tokens" type="integer" default="null">
+  Truncate input to this many tokens if it exceeds the limit.
+</ParamField>
+
+<ParamField path="additional_data" type="any" default="null">
+  Additional data to include in the response, passed through unchanged.
+</ParamField>
+
+## Response format
+
+<ResponseField name="object" type="string">
+  Always "list".
+</ResponseField>
+
+<ResponseField name="data" type="array">
+  Array of embedding objects.
+  
+  <ResponseField name="object" type="string">
+    Always "embedding".
+  </ResponseField>
+  
+  <ResponseField name="embedding" type="array | string">
+    The embedding vector, as an array of floats or base64 string.
+  </ResponseField>
+  
+  <ResponseField name="index" type="integer">
+    Index of the embedding in the input array.
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="model" type="string">
+  The model used for embeddings.
+</ResponseField>
+
+<ResponseField name="usage" type="object">
+  Token usage statistics.
+  
+  <ResponseField name="prompt_tokens" type="integer">
+    Number of tokens in the input.
+  </ResponseField>
+  
+  <ResponseField name="total_tokens" type="integer">
+    Total tokens processed.
+  </ResponseField>
+</ResponseField>
+
+## Example: Single text embedding
+
+```bash
+curl http://localhost:8000/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "input": "The quick brown fox jumps over the lazy dog"
+  }'
+```
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "object": "embedding",
+      "embedding": [
+        0.0123,
+        -0.0234,
+        0.0345,
+        ...
+      ],
+      "index": 0
+    }
+  ],
+  "model": "sentence-transformers/all-MiniLM-L6-v2",
+  "usage": {
+    "prompt_tokens": 12,
+    "total_tokens": 12
+  }
+}
+```
+
+## Example: Batch embeddings
+
+```bash
+curl http://localhost:8000/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "input": [
+      "First document to embed",
+      "Second document to embed",
+      "Third document to embed"
+    ]
+  }'
+```
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "object": "embedding",
+      "embedding": [0.0123, -0.0234, ...],
+      "index": 0
+    },
+    {
+      "object": "embedding",
+      "embedding": [0.0456, -0.0567, ...],
+      "index": 1
+    },
+    {
+      "object": "embedding",
+      "embedding": [0.0789, -0.0890, ...],
+      "index": 2
+    }
+  ],
+  "model": "sentence-transformers/all-MiniLM-L6-v2",
+  "usage": {
+    "prompt_tokens": 18,
+    "total_tokens": 18
+  }
+}
+```
+
+## Example: Matryoshka embeddings
+
+```bash
+curl http://localhost:8000/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nomic-ai/nomic-embed-text-v1.5",
+    "input": "Sample text for embedding",
+    "dimensions": 256
+  }'
+```
+
+The response will contain embeddings with 256 dimensions instead of the default (e.g., 768).
+
+## Example: Base64 encoding
+
+```bash
+curl http://localhost:8000/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "input": "Hello world",
+    "encoding_format": "base64"
+  }'
+```
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "object": "embedding",
+      "embedding": "AAAAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIj...",
+      "index": 0
+    }
+  ],
+  "model": "sentence-transformers/all-MiniLM-L6-v2",
+  "usage": {
+    "prompt_tokens": 3,
+    "total_tokens": 3
+  }
+}
+```
+
+## Use cases
+
+### Semantic search
+
+Embed documents and queries to find semantically similar content:
+
+```python
+import requests
+import numpy as np
+
+# Embed documents
+docs = ["Paris is the capital of France", "London is in England", "Berlin is in Germany"]
+response = requests.post(
+    "http://localhost:8000/v1/embeddings",
+    json={"model": "sentence-transformers/all-MiniLM-L6-v2", "input": docs}
+)
+doc_embeddings = [d["embedding"] for d in response.json()["data"]]
+
+# Embed query
+query = "What is the capital of France?"
+response = requests.post(
+    "http://localhost:8000/v1/embeddings",
+    json={"model": "sentence-transformers/all-MiniLM-L6-v2", "input": query}
+)
+query_embedding = response.json()["data"][0]["embedding"]
+
+# Find most similar document
+similarities = [np.dot(query_embedding, doc_emb) for doc_emb in doc_embeddings]
+most_similar = docs[np.argmax(similarities)]
+print(most_similar)  # "Paris is the capital of France"
+```
+
+### Clustering
+
+Group similar texts together:
+
+```python
+from sklearn.cluster import KMeans
+
+texts = ["text1", "text2", "text3", ...]
+response = requests.post(
+    "http://localhost:8000/v1/embeddings",
+    json={"model": "sentence-transformers/all-MiniLM-L6-v2", "input": texts}
+)
+embeddings = [d["embedding"] for d in response.json()["data"]]
+
+kmeans = KMeans(n_clusters=3)
+clusters = kmeans.fit_predict(embeddings)
+```
+
+## Related
+
+- [Models endpoint](/api/rest/models) - List available embedding models
+- [LLM.embed()](/api/llm#embed) - Python API equivalent
+- [PoolingParams](/api/pooling-params) - Configure embedding generation

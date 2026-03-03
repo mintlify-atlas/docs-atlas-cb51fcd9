@@ -1,0 +1,129 @@
+---
+title: Contributing to vLLM
+description: Learn how to contribute to vLLM, from reporting bugs to adding new models and features
+---
+
+Thank you for your interest in contributing to vLLM! Our community is open to everyone and welcomes all kinds of contributions, no matter how small or large.
+
+## Ways to contribute
+
+There are several ways you can contribute to the project:
+
+- Identify and report any issues or bugs
+- Request or add support for a new model
+- Suggest or implement new features
+- Improve documentation or contribute a how-to guide
+- Answer queries, offer PR reviews, and assist others
+
+We also believe in the power of community support. One of the most impactful ways to support us is by raising awareness about vLLM—talk about it in your blog posts, express your support on social media, or simply star our repository!
+
+## Getting started
+
+<CardGroup cols={2}>
+  <Card title="Development setup" icon="code" href="/contributing/development-setup">
+    Set up your local development environment
+  </Card>
+  <Card title="Testing guide" icon="flask" href="/contributing/testing">
+    Learn how to write and run tests
+  </Card>
+  <Card title="Adding models" icon="brain" href="/contributing/adding-models">
+    Implement new model architectures
+  </Card>
+  <Card title="Model registration" icon="file-code" href="/contributing/model-registration">
+    Register your model with vLLM
+  </Card>
+</CardGroup>
+
+## Finding tasks to work on
+
+Unsure where to start? Check out these resources:
+
+- [Good first issues](https://github.com/vllm-project/vllm/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22)
+- [Selected onboarding tasks](https://github.com/orgs/vllm-project/projects/6)
+- [New model requests](https://github.com/vllm-project/vllm/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22new-model%22)
+- [Models with multi-modal capabilities](https://github.com/orgs/vllm-project/projects/10)
+
+## Reporting issues
+
+If you encounter a bug or have a feature request:
+
+1. [Search existing issues](https://github.com/vllm-project/vllm/issues?q=is%3Aissue) first to see if it has already been reported
+2. If not, [file a new issue](https://github.com/vllm-project/vllm/issues/new/choose) with as much relevant information as possible
+
+<Warning>
+  If you discover a security vulnerability, please follow the instructions in the [SECURITY.md](https://github.com/vllm-project/vllm/blob/main/SECURITY.md) file.
+</Warning>
+
+## Pull request guidelines
+
+Before submitting a pull request, ensure it meets the following criteria:
+
+### DCO and signed-off-by
+
+When contributing changes to this project, you must agree to the [DCO](https://github.com/vllm-project/vllm/blob/main/DCO). Commits must include a `Signed-off-by:` header which certifies agreement with the terms of the DCO.
+
+Using `-s` with `git commit` will automatically add this header:
+
+```bash
+git commit -s -m "Your commit message"
+```
+
+<Tip>
+  You can enable automatic sign-off via your IDE:
+  - **PyCharm**: Click on the `Show Commit Options` icon and enable `Sign-off commit`
+  - **VSCode**: Enable the `Git: Always Sign Off` (`git.alwaysSignOff`) setting
+</Tip>
+
+### PR title and classification
+
+The PR title must be prefixed appropriately to indicate the type of change:
+
+- `[Bugfix]` for bug fixes
+- `[CI/Build]` for build or continuous integration improvements
+- `[Doc]` for documentation fixes and improvements
+- `[Model]` for adding a new model or improving an existing model (model name should appear in the title)
+- `[Frontend]` for changes on the vLLM frontend (e.g., OpenAI API server, `LLM` class)
+- `[Kernel]` for changes affecting CUDA kernels or other compute kernels
+- `[Core]` for changes in the core vLLM logic (e.g., `LLMEngine`, `AsyncLLMEngine`, `Scheduler`)
+- `[Hardware][Vendor]` for hardware-specific changes (vendor name should appear in the prefix)
+- `[Misc]` for PRs that do not fit the above categories (use sparingly)
+
+<Note>
+  If the PR spans more than one category, include all relevant prefixes.
+</Note>
+
+### Code quality standards
+
+Your PR must meet these code quality standards:
+
+- Adhere to [Google Python style guide](https://google.github.io/styleguide/pyguide.html) and [Google C++ style guide](https://google.github.io/styleguide/cppguide.html)
+- Pass all linter checks
+- Include well-documented code for future contributors
+- Include sufficient tests (both unit tests and integration tests)
+- Add documentation to `docs/` if the PR modifies user-facing behaviors
+
+### Notes for large changes
+
+For major architectural changes (>500 LOC excluding kernel/data/config/test), please create a GitHub issue (RFC) discussing the technical design and justification. PRs without an RFC may be tagged with `rfc-required`.
+
+## Review process
+
+The vLLM team aims to be a *transparent reviewing machine*. Here's what you can expect:
+
+1. After the PR is submitted, it will be assigned to a reviewer based on their expertise and availability
+2. The reviewer will provide status updates every 2-3 days
+3. If the PR is not reviewed within 7 days, feel free to ping the reviewer or the vLLM team
+4. The reviewer will add an `action-required` label if changes are needed
+5. Not all CI checks will be executed due to limited computational resources. The reviewer will add the `ready` label when the PR is ready to merge or a full CI run is needed
+
+<Note>
+  Please respond to all comments within a reasonable time frame. If a comment isn't clear or you disagree with a suggestion, feel free to ask for clarification or discuss the suggestion.
+</Note>
+
+## License
+
+By contributing to vLLM, you agree that your contributions will be licensed under the [Apache License 2.0](https://github.com/vllm-project/vllm/blob/main/LICENSE).
+
+## Thank you
+
+Thank you for taking the time to read these guidelines and for your interest in contributing to vLLM. All of your contributions help make vLLM a great tool and community for everyone!

@@ -1,0 +1,310 @@
+---
+title: Offline batch inference
+description: Run high-throughput batch inference with vLLM's LLM class for processing multiple prompts efficiently.
+---
+
+Offline inference enables you to run batch inference on multiple prompts using vLLM's `LLM` class. This is ideal for scenarios where you need to process a large number of prompts efficiently without the overhead of an HTTP server.
+
+## Quick start
+
+Initialize the vLLM engine with a model and generate completions:
+
+```python
+from vllm import LLM, SamplingParams
+
+# Initialize the vLLM engine
+llm = LLM(model="facebook/opt-125m")
+
+# Sample prompts
+prompts = [
+    "Hello, my name is",
+    "The president of the United States is",
+    "The capital of France is",
+    "The future of AI is",
+]
+
+# Create sampling parameters
+sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
+
+# Generate texts from the prompts
+outputs = llm.generate(prompts, sampling_params)
+
+# Print the outputs
+for output in outputs:
+    prompt = output.prompt
+    generated_text = output.outputs[0].text
+    print(f"Prompt: {prompt!r}")
+    print(f"Generated text: {generated_text!r}")
+```
+
+The `LLM` class automatically downloads the model from HuggingFace and initializes it with optimized configurations for your hardware.
+
+## Model types and APIs
+
+The available APIs depend on the model type:
+
+- **Generative models** - Output logprobs which are sampled to obtain the final text. Use `llm.generate()` or `llm.chat()` methods.
+- **Pooling models** - Output hidden states directly. Use for embeddings, classification, and scoring tasks.
+
+For more details, see the [API Reference](/api/offline-inference).
+
+## Generation with CLI arguments
+
+You can use engine arguments directly from the command line:
+
+```python
+from vllm import LLM, EngineArgs
+from vllm.utils.argparse_utils import FlexibleArgumentParser
+
+def create_parser():
+    parser = FlexibleArgumentParser()
+    # Add engine args
+    EngineArgs.add_cli_args(parser)
+    parser.set_defaults(model="meta-llama/Llama-3.2-1B-Instruct")
+    # Add sampling params
+    sampling_group = parser.add_argument_group("Sampling parameters")
+    sampling_group.add_argument("--max-tokens", type=int)
+    sampling_group.add_argument("--temperature", type=float)
+    sampling_group.add_argument("--top-p", type=float)
+    sampling_group.add_argument("--top-k", type=int)
+    return parser
+
+parser = create_parser()
+args = vars(parser.parse_args())
+
+# Create an LLM
+llm = LLM(**args)
+```
+
+Run with custom arguments:
+
+```bash
+python generate.py --model meta-llama/Llama-3.2-1B-Instruct --max-tokens 100 --temperature 0.7
+```
+
+## Chat interface
+
+For chat models with a chat template, use the `llm.chat()` method:
+
+```python
+from vllm import LLM
+
+llm = LLM(model="meta-llama/Llama-3.2-1B-Instruct")
+
+# Single conversation
+conversation = [
+    {"role": "system", "content": "You are a helpful assistant"},
+    {"role": "user", "content": "Hello"},
+    {"role": "assistant", "content": "Hello! How can I assist you today?"},
+    {"role": "user", "content": "Write an essay about the importance of higher education."},
+]
+
+outputs = llm.chat(conversation, sampling_params)
+
+# Batch inference with multiple conversations
+conversations = [conversation for _ in range(10)]
+outputs = llm.chat(conversations, sampling_params, use_tqdm=True)
+```
+
+### Custom chat templates
+
+You can optionally provide a custom chat template:
+
+```python
+with open("chat_template.jinja") as f:
+    chat_template = f.read()
+
+outputs = llm.chat(
+    conversations,
+    sampling_params,
+    chat_template=chat_template,
+)
+```
+
+## Async streaming inference
+
+For streaming token-by-token output, use the `AsyncLLM` engine:
+
+```python
+import asyncio
+from vllm import SamplingParams
+from vllm.engine.arg_utils import AsyncEngineArgs
+from vllm.sampling_params import RequestOutputKind
+from vllm.v1.engine.async_llm import AsyncLLM
+
+async def stream_response(engine: AsyncLLM, prompt: str, request_id: str):
+    print(f"Prompt: {prompt!r}")
+    print("Response: ", end="", flush=True)
+    
+    # Configure sampling for streaming with DELTA mode
+    sampling_params = SamplingParams(
+        max_tokens=100,
+        temperature=0.8,
+        output_kind=RequestOutputKind.DELTA,  # Get only new tokens
+    )
+    
+    # Stream tokens from AsyncLLM
+    async for output in engine.generate(
+        request_id=request_id,
+        prompt=prompt,
+        sampling_params=sampling_params
+    ):
+        for completion in output.outputs:
+            new_text = completion.text
+            if new_text:
+                print(new_text, end="", flush=True)
+        
+        if output.finished:
+            print("\nGeneration complete!")
+            break
+
+async def main():
+    engine_args = AsyncEngineArgs(
+        model="meta-llama/Llama-3.2-1B-Instruct",
+        enforce_eager=True,
+    )
+    engine = AsyncLLM.from_engine_args(engine_args)
+    
+    try:
+        await stream_response(engine, "The future of AI is", "req-1")
+    finally:
+        engine.shutdown()
+
+asyncio.run(main())
+```
+
+## Data parallel batch inference
+
+For large-scale batch processing across multiple GPUs, use data parallelism:
+
+<CodeGroup>
+
+```bash Single node
+python examples/offline_inference/data_parallel.py \
+    --model="ibm-research/PowerMoE-3b" \
+    -dp=2 \
+    -tp=2
+```
+
+```bash Multi-node
+# Node 0 (IP: 10.99.48.128)
+python examples/offline_inference/data_parallel.py \
+    --model="ibm-research/PowerMoE-3b" \
+    -dp=2 \
+    -tp=2 \
+    --dp-num-nodes=2 \
+    --dp-node-rank=0 \
+    --dp-master-addr=10.99.48.128 \
+    --dp-master-port=13345
+
+# Node 1
+python examples/offline_inference/data_parallel.py \
+    --model="ibm-research/PowerMoE-3b" \
+    -dp=2 \
+    -tp=2 \
+    --dp-num-nodes=2 \
+    --dp-node-rank=1 \
+    --dp-master-addr=10.99.48.128 \
+    --dp-master-port=13345
+```
+
+</CodeGroup>
+
+Each data parallel rank processes a different subset of prompts:
+
+```python
+from vllm import LLM, SamplingParams
+
+prompts = ["Hello", "World", "AI", "Future"] * 100
+
+# Distribute prompts across DP ranks
+floor = len(prompts) // dp_size
+remainder = len(prompts) % dp_size
+start_idx = rank * floor + min(rank, remainder)
+end_idx = (rank + 1) * floor + min(rank + 1, remainder)
+
+rank_prompts = prompts[start_idx:end_idx]
+
+llm = LLM(**engine_args)
+outputs = llm.generate(rank_prompts, sampling_params)
+```
+
+## Ray Data LLM API
+
+Ray Data provides advanced capabilities for large-scale batch inference:
+
+- Streaming execution for datasets exceeding cluster memory
+- Automatic sharding, load balancing, and autoscaling
+- Continuous batching for maximum GPU utilization
+- Support for tensor and pipeline parallelism
+- Reading/writing popular file formats and cloud storage
+
+```python
+import ray
+from ray.data.llm import vLLMEngineProcessorConfig, build_llm_processor
+
+# Configure vLLM engine
+config = vLLMEngineProcessorConfig(model_source="unsloth/Llama-3.2-1B-Instruct")
+processor = build_llm_processor(
+    config,
+    preprocess=lambda row: {
+        "messages": [
+            {"role": "system", "content": "You are a bot that completes haikus."},
+            {"role": "user", "content": row["item"]},
+        ],
+        "sampling_params": {"temperature": 0.3, "max_tokens": 250},
+    },
+    postprocess=lambda row: {"answer": row["generated_text"]},
+)
+
+# Process dataset
+ds = ray.data.from_items(["An old silent pond..."])
+ds = processor(ds)
+ds.write_parquet("local:///tmp/data/")
+```
+
+For more information, see the [Ray Data LLM documentation](https://docs.ray.io/en/latest/data/working-with-llms.html).
+
+## Common configurations
+
+<Tabs>
+  <Tab title="Memory optimization">
+    ```python
+    llm = LLM(
+        model="meta-llama/Llama-3.2-1B-Instruct",
+        gpu_memory_utilization=0.9,
+        max_model_len=4096,
+    )
+    ```
+  </Tab>
+  <Tab title="Quantization">
+    ```python
+    llm = LLM(
+        model="meta-llama/Llama-3.2-1B-Instruct",
+        quantization="awq",
+        dtype="half",
+    )
+    ```
+  </Tab>
+  <Tab title="Tensor parallelism">
+    ```python
+    llm = LLM(
+        model="meta-llama/Llama-70B-Instruct",
+        tensor_parallel_size=4,
+    )
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+The `LLM` class is optimized for throughput over latency. For low-latency serving with concurrent requests, use the [OpenAI-compatible server](/serving/openai-compatible-server).
+</Note>
+
+## Examples
+
+Explore full examples in the vLLM repository:
+
+- [Basic offline inference](https://github.com/vllm-project/vllm/tree/main/examples/offline_inference/basic/basic.py) - vllm/entrypoints/offline_inference/basic/basic.py:19
+- [Chat interface](https://github.com/vllm-project/vllm/tree/main/examples/offline_inference/basic/chat.py) - vllm/entrypoints/offline_inference/basic/chat.py:34
+- [Async streaming](https://github.com/vllm-project/vllm/tree/main/examples/offline_inference/async_llm_streaming.py) - vllm/entrypoints/offline_inference/async_llm_streaming.py:45
+- [Data parallel inference](https://github.com/vllm-project/vllm/tree/main/examples/offline_inference/data_parallel.py) - vllm/entrypoints/offline_inference/data_parallel.py:136

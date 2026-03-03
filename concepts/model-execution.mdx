@@ -1,0 +1,565 @@
+---
+title: Model execution and inference flow
+description: Understanding how vLLM executes models and processes requests
+---
+
+This page explains how vLLM executes model inference, from receiving a request to generating tokens. Understanding the execution flow helps with performance tuning and debugging.
+
+## Overview
+
+vLLM's execution flow is designed for maximum throughput through:
+
+- **Continuous batching** - Requests dynamically join and leave batches
+- **Iteration-level scheduling** - New scheduling decision every forward pass
+- **Asynchronous execution** - Scheduling and GPU execution overlap
+- **CUDA graph optimization** - Kernel launch overhead eliminated
+
+## Request lifecycle
+
+A request flows through multiple stages from arrival to completion:
+
+<Steps>
+
+### Request ingestion
+
+Requests arrive through the API server or LLM class and are converted to `EngineCoreRequest` objects.
+
+### Request queuing
+
+The scheduler adds requests to the waiting queue, ordered by arrival time or priority.
+
+### Scheduling decision
+
+Every iteration, the scheduler decides which requests to process based on available resources.
+
+### Batch formation
+
+Selected requests are grouped into a batch, with both prefill and decode requests potentially in the same batch (continuous batching).
+
+### Model execution
+
+GPU workers execute the model forward pass on the batch.
+
+### Token generation
+
+Sampling generates next tokens, which are added to sequences.
+
+### Output processing
+
+Tokens are decoded to text and checked against stopping criteria.
+
+### Request completion
+
+When a request finishes (EOS token, max length, or stop string), it's removed from the system.
+
+</Steps>
+
+## Scheduling and batching
+
+### The scheduler's role
+
+The `Scheduler` class is the central coordinator in the engine core:
+
+```python
+class Scheduler(SchedulerInterface):
+    def __init__(self, vllm_config: VllmConfig, kv_cache_config: KVCacheConfig, ...):
+        # Scheduling constraints
+        self.max_num_running_reqs = scheduler_config.max_num_seqs
+        self.max_num_scheduled_tokens = scheduler_config.max_num_batched_tokens
+        
+        # KV cache management  
+        self.kv_cache_manager = KVCacheManager(...)
+        
+        # Request queues
+        self.waiting_queue = create_request_queue(...)
+        self.running_queue = create_request_queue(...)
+```
+
+**Location in codebase:** `vllm/v1/core/sched/scheduler.py:63`
+
+### Continuous batching
+
+Unlike static batching, continuous batching allows requests to join and leave batches dynamically:
+
+**Traditional batching:**
+```
+Batch 1: [Req A (50 tokens), Req B (50 tokens), Req C (50 tokens)]
+# Wait for all requests to finish before starting new batch
+Batch 2: [Req D, Req E, Req F]
+```
+
+**Continuous batching:**
+```
+Iteration 1: [Req A (token 1), Req B (token 1), Req C (token 1)]
+Iteration 2: [Req A (token 2), Req B (token 2), Req C (token 2)]
+Iteration 3: [Req A (token 3), Req B (done!), Req C (token 3), Req D (token 1)]  
+Iteration 4: [Req A (token 4), Req C (token 4), Req D (token 2), Req E (token 1)]
+```
+
+This maximizes GPU utilization by always keeping the batch full.
+
+### Scheduling constraints
+
+The scheduler respects several constraints when building batches:
+
+**1. Maximum running requests:**
+```python
+max_num_running_reqs = scheduler_config.max_num_seqs  # Default: 256
+```
+
+**2. Maximum scheduled tokens:**
+```python
+max_num_scheduled_tokens = scheduler_config.max_num_batched_tokens  # Default: varies by model
+```
+
+**3. KV cache availability:**
+```python
+# Check if enough blocks are available
+available_blocks = self.kv_cache_manager.get_num_free_blocks()
+required_blocks = estimate_blocks_for_request(request)
+
+if available_blocks >= required_blocks:
+    # Can schedule this request
+```
+
+**Location in codebase:** `vllm/v1/core/sched/scheduler.py:100`
+
+### Prefill vs decode phases
+
+vLLM distinguishes between two execution phases:
+
+**Prefill phase:**
+- Process all input tokens at once
+- Compute KV cache for the entire prompt
+- More compute-intensive (many tokens in parallel)
+- Can use techniques like chunked prefill
+
+**Decode phase:**  
+- Process one token at a time
+- Generate tokens autoregressively
+- More memory-bandwidth intensive
+- Optimized with CUDA graphs
+
+<Note>
+vLLM can mix prefill and decode requests in the same batch, though this may be disabled for performance reasons depending on configuration.
+</Note>
+
+## Model execution
+
+### GPU model runner
+
+The `GPUModelRunner` handles the actual model execution on each GPU worker:
+
+```python
+class GPUModelRunner:
+    def __init__(self, vllm_config: VllmConfig, ...):
+        # Load the model
+        self.model = ...
+        
+        # Setup attention backend (e.g., FlashAttention, PagedAttention)
+        self.attn_backend = ...
+        
+        # CUDA graph dispatcher for decode optimization  
+        self.cudagraph_dispatcher = ...
+```
+
+**Key responsibilities:**
+- Load model weights (with sharding for tensor parallelism)
+- Prepare input tensors from scheduler output
+- Execute model forward pass
+- Apply sampling to generate next tokens
+- Manage CUDA graphs for decode phase
+
+**Location in codebase:** `vllm/v1/worker/gpu_model_runner.py:200`
+
+### Input batch preparation
+
+Before execution, the scheduler output is converted to an `InputBatch`:
+
+```python
+class InputBatch:
+    """Prepared batch ready for model execution."""
+    
+    # Token IDs to process
+    token_ids: torch.Tensor
+    
+    # Position IDs for each token
+    position_ids: torch.Tensor
+    
+    # Attention metadata (block tables, seq lens, etc.)
+    attn_metadata: AttentionMetadata
+    
+    # Sampling metadata  
+    sampling_metadata: SamplingMetadata
+```
+
+**Location in codebase:** `vllm/v1/worker/gpu_input_batch.py:43`
+
+### Forward pass execution
+
+The actual forward pass follows this flow:
+
+<Steps>
+
+### Prepare inputs
+
+Convert scheduler output to input tensors (token IDs, positions, attention masks).
+
+### Execute embedding layer
+
+Convert token IDs to embeddings.
+
+### Execute transformer layers
+
+Run through all transformer layers with attention and MLP.
+
+### Execute final layer norm
+
+Normalize the output from the last transformer layer.
+
+### Compute logits
+
+Project hidden states to vocabulary size to get token logits.
+
+### Apply sampling
+
+Generate next tokens using sampling strategy (greedy, top-k, top-p, etc.).
+
+</Steps>
+
+### Attention computation
+
+Attention is computed using the selected backend:
+
+```python
+# During prefill: process all tokens
+hidden_states = self.attn_backend.forward(
+    query=q,
+    key=k,  
+    value=v,
+    kv_cache=kv_cache,
+    attn_metadata=attn_metadata,
+)
+
+# During decode: process one token, attend to all cached tokens
+hidden_states = self.attn_backend.forward(
+    query=q,  # [batch_size, 1, num_heads, head_dim]
+    key=None,  # Retrieved from KV cache
+    value=None,  # Retrieved from KV cache
+    kv_cache=kv_cache,
+    attn_metadata=attn_metadata,  # Contains block table mapping
+)
+```
+
+**Location in codebase:** `vllm/v1/attention/backend.py`, attention backends in `vllm/v1/attention/backends/`
+
+## CUDA graph optimization
+
+### Why CUDA graphs?
+
+During decode, each iteration processes only 1 token per sequence. Kernel launch overhead becomes significant:
+
+- **Without CUDA graphs:** ~50-100μs kernel launch overhead per kernel
+- **With CUDA graphs:** &lt;1μs overhead for the entire graph
+
+For decode-heavy workloads, this can double throughput.
+
+### How CUDA graphs work in vLLM
+
+vLLM captures CUDA graphs for different batch sizes:
+
+```python
+class CudagraphDispatcher:
+    def __init__(self, ...):
+        # Captured graphs for different batch sizes
+        self.cudagraphs: dict[tuple, CUDAGraphWrapper] = {}
+        
+    def execute(self, batch_size: int, ...):
+        # Find or capture graph for this batch size
+        graph = self.get_or_capture_graph(batch_size)
+        
+        # Execute the captured graph (very fast!)
+        graph.replay()
+```
+
+**Capture process:**
+
+1. Run a warmup forward pass for a specific batch size
+2. Start CUDA graph capture
+3. Run the forward pass again (records all CUDA operations)
+4. End capture - graph is now replayable
+5. On subsequent iterations with same batch size, replay the graph
+
+**Location in codebase:** `vllm/v1/cudagraph_dispatcher.py`, `vllm/compilation/cuda_graph.py`
+
+<Warning>
+CUDA graphs require fixed tensor shapes. vLLM captures graphs for multiple batch sizes and selects the appropriate one at runtime.
+</Warning>
+
+### Graph capture considerations
+
+**What can be captured:**
+- Decode phase (fixed 1 token per sequence)
+- Fixed batch sizes (e.g., 1, 2, 4, 8, 16, 32, ...)
+- Standard attention operations
+
+**What cannot be captured:**
+- Prefill phase (variable prompt lengths)
+- Dynamic control flow
+- CPU-GPU synchronization
+
+**Memory overhead:**
+- Each captured graph allocates GPU memory
+- vLLM limits the number of captured graphs based on available memory
+
+**Location in codebase:** `docs/design/cuda_graphs.md`
+
+## Sampling and token generation
+
+### Sampling strategies
+
+vLLM supports multiple sampling methods:
+
+**Greedy sampling:**
+```python
+SamplingParams(temperature=0)  # Always pick highest probability token
+```
+
+**Temperature sampling:**
+```python
+SamplingParams(temperature=0.8)  # Adjust probability distribution
+```
+
+**Top-k sampling:**
+```python
+SamplingParams(top_k=50)  # Sample from top 50 tokens
+```
+
+**Top-p (nucleus) sampling:**
+```python
+SamplingParams(top_p=0.95)  # Sample from smallest set with cumulative probability >= 0.95
+```
+
+**Beam search:**
+```python
+SamplingParams(use_beam_search=True, best_of=5)  # Keep 5 best sequences
+```
+
+### Sampler implementation
+
+The `Sampler` class handles token generation:
+
+```python
+class Sampler:
+    def forward(self, logits: torch.Tensor, sampling_metadata: SamplingMetadata):
+        # Apply temperature scaling
+        logits = logits / temperature
+        
+        # Apply top-k/top-p filtering
+        logits = self._apply_top_k_top_p(logits, ...)
+        
+        # Sample tokens
+        next_tokens = torch.multinomial(probs, num_samples=1)
+        
+        return SamplerOutput(sampled_token_ids=next_tokens, ...)
+```
+
+**Location in codebase:** `vllm/v1/sample/sampler.py:159`
+
+### Logits processing
+
+Before sampling, logits can be modified by processors:
+
+```python
+class LogitsProcessor:
+    def __call__(self, logits: torch.Tensor, ...) -> torch.Tensor:
+        # Modify logits (e.g., apply bias, mask certain tokens)
+        return modified_logits
+```
+
+**Common processors:**
+- **Repetition penalty** - Reduce probability of recently generated tokens
+- **Frequency/presence penalty** - OpenAI-style penalties
+- **Grammar constraints** - Enforce structured output (JSON, regex)
+- **Bias** - Add bias to specific tokens
+
+**Location in codebase:** `vllm/v1/sample/logits_processor/`, `docs/design/logits_processors.md`
+
+## Output processing and stopping
+
+### Output processor
+
+The `OutputProcessor` converts model outputs to user-facing results:
+
+```python
+class OutputProcessor:
+    def process_outputs(self, outputs: list[EngineCoreOutput], ...):
+        for output in outputs:
+            # Decode token IDs to text
+            text = self.tokenizer.decode(output.token_ids)
+            
+            # Check stopping criteria
+            if self._should_stop(output):
+                output.finished = True
+                output.finish_reason = self._get_finish_reason(output)
+            
+            # Create RequestOutput for user
+            request_outputs.append(RequestOutput(...))
+```
+
+**Location in codebase:** `vllm/v1/engine/output_processor.py:34`
+
+### Stopping criteria
+
+Requests can finish for multiple reasons:
+
+**1. EOS token generated:**
+```python
+if token_id == tokenizer.eos_token_id:
+    finish_reason = "stop"
+```
+
+**2. Maximum length reached:**
+```python
+if len(output_tokens) >= sampling_params.max_tokens:
+    finish_reason = "length"
+```
+
+**3. Stop string matched:**
+```python
+if any(stop_str in generated_text for stop_str in sampling_params.stop):
+    finish_reason = "stop"
+```
+
+**4. Request aborted:**
+```python
+if request.aborted:
+    finish_reason = "abort"
+```
+
+**Location in codebase:** `vllm/v1/core/sched/utils.py:49`
+
+## Engine iteration loop
+
+The core engine runs a continuous loop:
+
+```python
+class EngineCore:
+    def run_busy_loop(self):
+        while True:
+            # 1. Get new requests from API server (via ZMQ)
+            new_requests = self._get_new_requests()
+            
+            # 2. Add to scheduler
+            for req in new_requests:
+                self.scheduler.add_request(req)
+            
+            # 3. Schedule next batch
+            scheduler_output = self.scheduler.schedule()
+            
+            # 4. Execute on GPU workers
+            model_output = self.model_executor.execute_model(scheduler_output)
+            
+            # 5. Update scheduler with results  
+            engine_outputs = self.scheduler.update_from_outputs(model_output)
+            
+            # 6. Send outputs back to API server (via ZMQ)
+            self._send_outputs(engine_outputs)
+```
+
+**Location in codebase:** `vllm/v1/engine/core.py:200`
+
+<Note>
+This busy loop runs continuously to minimize latency. The engine core process uses 100% of one CPU core.
+</Note>
+
+## Parallelism strategies
+
+vLLM supports multiple parallelism strategies for scaling:
+
+### Tensor parallelism
+
+Model weights are sharded across GPUs:
+
+```bash
+vllm serve model --tensor-parallel-size 4  # Split across 4 GPUs
+```
+
+- Each GPU holds 1/4 of the weights
+- Communication required for each layer
+- Good for large models that don't fit on one GPU
+
+### Pipeline parallelism  
+
+Model layers are distributed across GPUs:
+
+```bash
+vllm serve model --pipeline-parallel-size 2  # 2 stages
+```
+
+- Each GPU holds different layers
+- Reduces communication compared to tensor parallelism
+- Introduces pipeline bubbles
+
+### Data parallelism
+
+Multiple independent instances serve different requests:
+
+```bash
+vllm serve model --data-parallel-size 2  # 2 replicas
+```
+
+- Each replica has full model weights
+- No communication between replicas
+- Load balanced across replicas
+
+**Location in codebase:** `vllm/config.py`, `vllm/distributed/`
+
+## Performance optimization
+
+### Chunked prefill
+
+Long prompts can be split into chunks:
+
+```python
+scheduler_config.enable_chunked_prefill = True
+scheduler_config.max_num_batched_tokens = 512  # Process 512 tokens at a time
+```
+
+Benefits:
+- Reduces latency for decode requests (not blocked by long prefills)
+- Better GPU utilization
+- More consistent iteration times
+
+### Prefix caching
+
+Common prompt prefixes share KV cache:
+
+```bash
+vllm serve model --enable-prefix-caching
+```
+
+- Automatic detection of shared prefixes
+- Significant speedup for repeated prompts
+- Lower memory usage
+
+**Location in codebase:** `docs/design/memory-management.md`
+
+### Speculative decoding
+
+Use a smaller draft model to propose tokens:
+
+```bash
+vllm serve model --speculative-model small-model --num-speculative-tokens 5
+```
+
+- Draft model proposes multiple tokens
+- Target model verifies in parallel
+- Can achieve 2-3x speedup for certain workloads
+
+## Next steps
+
+- Learn about [System architecture](/concepts/architecture) for the bigger picture
+- Explore [PagedAttention](/concepts/paged-attention) for memory management details
+- Review [Performance tuning](/configuration/optimization) for optimization techniques
+- Check out [Distributed inference](/serving/distributed-serving) for multi-GPU serving

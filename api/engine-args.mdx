@@ -1,0 +1,219 @@
+---
+title: EngineArgs
+description: Configuration arguments for vLLM engine initialization
+---
+
+The `EngineArgs` dataclass contains all configuration parameters for initializing the vLLM engine. It provides fine-grained control over model loading, parallelism, memory management, and execution.
+
+## Overview
+
+```python
+from vllm.engine.arg_utils import EngineArgs
+
+engine_args = EngineArgs(
+    model="facebook/opt-125m",
+    tensor_parallel_size=2,
+    gpu_memory_utilization=0.9,
+    max_model_len=2048,
+)
+```
+
+## Model configuration
+
+<ParamField path="model" type="str" required>
+  The name or path of a HuggingFace Transformers model.
+</ParamField>
+
+<ParamField path="tokenizer" type="str | None" default="None">
+  The name or path of a HuggingFace Transformers tokenizer. If None, uses the model path.
+</ParamField>
+
+<ParamField path="tokenizer_mode" type="str" default="auto">
+  The tokenizer mode: `"auto"` (fast if available) or `"slow"` (always use slow tokenizer).
+</ParamField>
+
+<ParamField path="trust_remote_code" type="bool" default="False">
+  Trust remote code from HuggingFace when downloading model and tokenizer.
+</ParamField>
+
+<ParamField path="dtype" type="str" default="auto">
+  Data type for model weights and activations. Supports `"auto"`, `"float32"`, `"float16"`, or `"bfloat16"`.
+</ParamField>
+
+<ParamField path="quantization" type="str | None" default="None">
+  Quantization method: `"awq"`, `"gptq"`, `"fp8"`, or None.
+</ParamField>
+
+<ParamField path="max_model_len" type="int | None" default="None">
+  Maximum sequence length. If None, uses the model's config value.
+</ParamField>
+
+<ParamField path="revision" type="str | None" default="None">
+  Model revision (branch name, tag, or commit id).
+</ParamField>
+
+<ParamField path="tokenizer_revision" type="str | None" default="None">
+  Tokenizer revision (branch name, tag, or commit id).
+</ParamField>
+
+<ParamField path="seed" type="int" default="0">
+  Random seed for sampling.
+</ParamField>
+
+## Parallelism configuration
+
+<ParamField path="tensor_parallel_size" type="int" default="1">
+  Number of GPUs to use for tensor parallelism.
+</ParamField>
+
+<ParamField path="pipeline_parallel_size" type="int" default="1">
+  Number of pipeline stages for pipeline parallelism.
+</ParamField>
+
+<ParamField path="data_parallel_size" type="int" default="1">
+  Number of data parallel replicas.
+</ParamField>
+
+<ParamField path="distributed_executor_backend" type="str | None" default="None">
+  Backend for distributed execution: `"ray"`, `"mp"` (multiprocessing), or None (auto-detect).
+</ParamField>
+
+<ParamField path="disable_custom_all_reduce" type="bool" default="False">
+  Disable custom all-reduce kernels and use NCCL instead.
+</ParamField>
+
+## Memory configuration
+
+<ParamField path="gpu_memory_utilization" type="float" default="0.9">
+  Fraction of GPU memory to use for model and KV cache (0.0 to 1.0).
+</ParamField>
+
+<ParamField path="kv_cache_memory_bytes" type="int | None" default="None">
+  Exact size of KV cache per GPU in bytes. When set, overrides `gpu_memory_utilization`.
+</ParamField>
+
+<ParamField path="swap_space" type="float" default="4">
+  CPU swap space size in GiB per GPU.
+</ParamField>
+
+<ParamField path="cpu_offload_gb" type="float" default="0">
+  Size of CPU memory in GiB for offloading model weights.
+</ParamField>
+
+<ParamField path="block_size" type="int" default="16">
+  Token block size for paged attention.
+</ParamField>
+
+<ParamField path="enable_prefix_caching" type="bool | None" default="None">
+  Enable prefix caching to reuse KV cache for common prefixes.
+</ParamField>
+
+## Scheduling configuration
+
+<ParamField path="max_num_batched_tokens" type="int | None" default="None">
+  Maximum number of tokens to batch together. If None, uses model's max sequence length.
+</ParamField>
+
+<ParamField path="max_num_seqs" type="int | None" default="None">
+  Maximum number of sequences to process in a batch.
+</ParamField>
+
+<ParamField path="scheduling_policy" type="str" default="fcfs">
+  Scheduling policy: `"fcfs"` (first-come-first-served) or `"priority"`.
+</ParamField>
+
+<ParamField path="enable_chunked_prefill" type="bool | None" default="None">
+  Enable chunked prefill to process long prompts in chunks.
+</ParamField>
+
+## Execution configuration
+
+<ParamField path="enforce_eager" type="bool" default="False">
+  Disable CUDA graphs and use eager execution only.
+</ParamField>
+
+<ParamField path="max_logprobs" type="int" default="20">
+  Maximum number of log probabilities to return per token.
+</ParamField>
+
+<ParamField path="disable_log_stats" type="bool" default="False">
+  Disable logging of statistics.
+</ParamField>
+
+## Multi-modal configuration
+
+<ParamField path="limit_mm_per_prompt" type="dict[str, int]" default="{}">
+  Maximum number of multi-modal inputs per prompt by modality type.
+</ParamField>
+
+<ParamField path="mm_processor_kwargs" type="dict | None" default="None">
+  Additional kwargs for the multi-modal processor.
+</ParamField>
+
+## LoRA configuration
+
+<ParamField path="enable_lora" type="bool" default="False">
+  Enable LoRA adapter support.
+</ParamField>
+
+<ParamField path="max_loras" type="int" default="1">
+  Maximum number of LoRA adapters to cache.
+</ParamField>
+
+<ParamField path="max_lora_rank" type="int" default="16">
+  Maximum LoRA rank.
+</ParamField>
+
+<ParamField path="lora_dtype" type="str | None" default="None">
+  Data type for LoRA weights.
+</ParamField>
+
+## Advanced configuration
+
+<ParamField path="compilation_config" type="dict | CompilationConfig | None" default="None">
+  Configuration for model compilation and CUDA graphs.
+</ParamField>
+
+<ParamField path="attention_config" type="dict | AttentionConfig | None" default="None">
+  Configuration for attention mechanisms.
+</ParamField>
+
+<ParamField path="pooler_config" type="PoolerConfig | None" default="None">
+  Configuration for pooling models (embeddings, classification).
+</ParamField>
+
+## Example: Multi-GPU configuration
+
+```python
+from vllm.engine.arg_utils import EngineArgs
+from vllm import LLM
+
+engine_args = EngineArgs(
+    model="meta-llama/Llama-2-70b-hf",
+    tensor_parallel_size=4,  # Use 4 GPUs
+    dtype="float16",
+    gpu_memory_utilization=0.95,
+    max_model_len=4096,
+    enable_prefix_caching=True,
+)
+
+llm = LLM(**engine_args.__dict__)
+```
+
+## Example: Quantized model
+
+```python
+engine_args = EngineArgs(
+    model="TheBloke/Llama-2-13B-AWQ",
+    quantization="awq",
+    dtype="float16",
+    gpu_memory_utilization=0.9,
+)
+
+llm = LLM(**engine_args.__dict__)
+```
+
+## Related
+
+- [LLM](/api/llm) - Use EngineArgs with the LLM class
+- [AsyncLLMEngine](/api/async-llm-engine) - Use EngineArgs with AsyncLLMEngine

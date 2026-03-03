@@ -1,0 +1,267 @@
+---
+title: Output classes
+description: Output data structures returned by vLLM
+---
+
+vLLM returns different output classes depending on the task: text generation, embeddings, classification, or scoring.
+
+## RequestOutput
+
+The output of a text completion request.
+
+```python
+class RequestOutput:
+    request_id: str
+    prompt: str | None
+    prompt_token_ids: list[int] | None
+    prompt_logprobs: PromptLogprobs | None
+    outputs: list[CompletionOutput]
+    finished: bool
+    metrics: RequestStateStats | None
+    num_cached_tokens: int | None
+```
+
+### Attributes
+
+<ResponseField name="request_id" type="str">
+  Unique identifier for the request.
+</ResponseField>
+
+<ResponseField name="prompt" type="str | None">
+  The prompt string of the request.
+</ResponseField>
+
+<ResponseField name="prompt_token_ids" type="list[int] | None">
+  Token IDs of the prompt.
+</ResponseField>
+
+<ResponseField name="prompt_logprobs" type="list | None">
+  Log probabilities of prompt tokens, if requested.
+</ResponseField>
+
+<ResponseField name="outputs" type="list[CompletionOutput]">
+  List of completion outputs. Length equals `n` from SamplingParams.
+</ResponseField>
+
+<ResponseField name="finished" type="bool">
+  Whether the request has finished generating.
+</ResponseField>
+
+<ResponseField name="metrics" type="RequestStateStats | None">
+  Performance metrics for the request.
+</ResponseField>
+
+<ResponseField name="num_cached_tokens" type="int | None">
+  Number of tokens that hit the prefix cache.
+</ResponseField>
+
+### Example
+
+```python
+from vllm import LLM, SamplingParams
+
+llm = LLM(model="facebook/opt-125m")
+sampling_params = SamplingParams(temperature=0.8, max_tokens=100)
+
+outputs = llm.generate(["Hello, my name is"], sampling_params)
+
+for request_output in outputs:
+    print(f"Request ID: {request_output.request_id}")
+    print(f"Prompt: {request_output.prompt}")
+    print(f"Finished: {request_output.finished}")
+    
+    for completion_output in request_output.outputs:
+        print(f"Generated text: {completion_output.text}")
+        print(f"Tokens: {completion_output.token_ids}")
+```
+
+## CompletionOutput
+
+A single completion output within a RequestOutput.
+
+```python
+class CompletionOutput:
+    index: int
+    text: str
+    token_ids: list[int]
+    cumulative_logprob: float | None
+    logprobs: SampleLogprobs | None
+    finish_reason: str | None
+    stop_reason: int | str | None
+```
+
+### Attributes
+
+<ResponseField name="index" type="int">
+  Index of this output in the request (0 to n-1).
+</ResponseField>
+
+<ResponseField name="text" type="str">
+  The generated text.
+</ResponseField>
+
+<ResponseField name="token_ids" type="list[int]">
+  Token IDs of the generated text.
+</ResponseField>
+
+<ResponseField name="cumulative_logprob" type="float | None">
+  Cumulative log probability of the generated sequence.
+</ResponseField>
+
+<ResponseField name="logprobs" type="list | None">
+  Per-token log probabilities, if requested.
+</ResponseField>
+
+<ResponseField name="finish_reason" type="str | None">
+  Reason why generation stopped: `"stop"`, `"length"`, or `"abort"`.
+</ResponseField>
+
+<ResponseField name="stop_reason" type="int | str | None">
+  The specific stop token or string that caused completion, or None.
+</ResponseField>
+
+## PoolingRequestOutput
+
+Base class for pooling model outputs.
+
+```python
+class PoolingRequestOutput:
+    request_id: str
+    outputs: PoolingOutput
+    prompt_token_ids: list[int]
+    num_cached_tokens: int
+    finished: bool
+```
+
+### Attributes
+
+<ResponseField name="request_id" type="str">
+  Unique identifier for the request.
+</ResponseField>
+
+<ResponseField name="outputs" type="PoolingOutput">
+  The pooling output (type varies by task).
+</ResponseField>
+
+<ResponseField name="prompt_token_ids" type="list[int]">
+  Token IDs of the input prompt.
+</ResponseField>
+
+<ResponseField name="num_cached_tokens" type="int">
+  Number of tokens that hit the prefix cache.
+</ResponseField>
+
+<ResponseField name="finished" type="bool">
+  Whether pooling is complete.
+</ResponseField>
+
+## EmbeddingRequestOutput
+
+Output for embedding generation tasks.
+
+```python
+class EmbeddingRequestOutput(PoolingRequestOutput):
+    outputs: EmbeddingOutput
+```
+
+### EmbeddingOutput
+
+```python
+class EmbeddingOutput:
+    embedding: list[float]
+```
+
+<ResponseField name="embedding" type="list[float]">
+  The embedding vector. Length depends on model's hidden dimension.
+</ResponseField>
+
+### Example
+
+```python
+from vllm import LLM
+
+llm = LLM(model="sentence-transformers/all-MiniLM-L6-v2", runner="pooling")
+outputs = llm.embed(["Hello world", "How are you?"])
+
+for output in outputs:
+    embedding = output.outputs.embedding
+    print(f"Embedding dimension: {len(embedding)}")
+    print(f"Embedding vector: {embedding[:5]}...")  # First 5 values
+```
+
+## ClassificationRequestOutput
+
+Output for classification tasks.
+
+```python
+class ClassificationRequestOutput(PoolingRequestOutput):
+    outputs: ClassificationOutput
+```
+
+### ClassificationOutput
+
+```python
+class ClassificationOutput:
+    probs: list[float]
+```
+
+<ResponseField name="probs" type="list[float]">
+  Probability distribution over classes. Length equals number of classes.
+</ResponseField>
+
+### Example
+
+```python
+llm = LLM(model="your-classifier", runner="pooling")
+outputs = llm.classify(["This is a great product!"])
+
+for output in outputs:
+    probs = output.outputs.probs
+    predicted_class = probs.index(max(probs))
+    print(f"Predicted class: {predicted_class}")
+    print(f"Probabilities: {probs}")
+```
+
+## ScoringRequestOutput
+
+Output for scoring/ranking tasks.
+
+```python
+class ScoringRequestOutput(PoolingRequestOutput):
+    outputs: ScoringOutput
+```
+
+### ScoringOutput
+
+```python
+class ScoringOutput:
+    score: float
+```
+
+<ResponseField name="score" type="float">
+  The similarity or relevance score.
+</ResponseField>
+
+### Example
+
+```python
+llm = LLM(model="your-reranker", runner="pooling")
+
+query = "machine learning"
+documents = [
+    "ML is a subset of AI",
+    "Python is a language",
+]
+
+pairs = [f"{query} [SEP] {doc}" for doc in documents]
+outputs = llm.score(pairs)
+
+for i, output in enumerate(outputs):
+    print(f"Document {i} score: {output.outputs.score}")
+```
+
+## Related
+
+- [LLM](/api/llm) - Generate outputs using the LLM class
+- [SamplingParams](/api/sampling-params) - Control text generation
+- [PoolingParams](/api/pooling-params) - Control pooling operations

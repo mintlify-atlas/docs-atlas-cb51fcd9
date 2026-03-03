@@ -1,0 +1,390 @@
+---
+title: Performance optimization guide
+description: Strategies and best practices for optimizing vLLM performance, throughput, and latency
+---
+
+vLLM provides multiple optimization strategies to improve throughput, reduce latency, and maximize GPU utilization. This guide covers the key optimization techniques.
+
+<Note>
+Running out of memory? See the [conserving memory guide](conserving_memory) for memory optimization strategies.
+</Note>
+
+## Preemption
+
+Due to the autoregressive nature of transformer architecture, vLLM may need to preempt requests when KV cache space is insufficient.
+
+### Understanding preemption
+
+When you see this warning:
+
+```text
+WARNING: Sequence group 0 is preempted by PreemptionMode.RECOMPUTE mode 
+because there is not enough KV cache space. This can affect the 
+end-to-end performance. total_cumulative_preemption_cnt=1
+```
+
+It means vLLM is evicting requests from KV cache and will recompute them later. While this ensures robustness, frequent preemptions hurt performance.
+
+### Reducing preemption
+
+To minimize preemption:
+
+<ParamField path="gpu_memory_utilization" type="float">
+  Increase GPU memory utilization (default: 0.9).
+  
+  ```python
+  llm = LLM(model="MODEL", gpu_memory_utilization=0.95)
+  ```
+  
+  Provides more KV cache space but leaves less headroom for temporary allocations.
+</ParamField>
+
+<ParamField path="max_num_seqs" type="int">
+  Decrease maximum concurrent sequences.
+  
+  ```python
+  llm = LLM(model="MODEL", max_num_seqs=128)
+  ```
+  
+  Reduces concurrent batch size, requiring less KV cache.
+</ParamField>
+
+<ParamField path="max_num_batched_tokens" type="int">
+  Decrease maximum batched tokens.
+  
+  ```python
+  llm = LLM(model="MODEL", max_num_batched_tokens=8192)
+  ```
+</ParamField>
+
+<ParamField path="tensor_parallel_size" type="int">
+  Increase tensor parallelism.
+  
+  ```python
+  llm = LLM(model="MODEL", tensor_parallel_size=4)
+  ```
+  
+  Distributes model across more GPUs, leaving more memory per GPU for KV cache. May add communication overhead.
+</ParamField>
+
+### Monitoring preemption
+
+Monitor preemption through:
+
+- **Prometheus metrics** exposed by vLLM
+- **Log statistics** with `disable_log_stats=False`
+
+<Note>
+In vLLM V1, the default preemption mode is `RECOMPUTE` rather than `SWAP`, as recomputation has lower overhead in the V1 architecture.
+</Note>
+
+## Chunked prefill
+
+Chunked prefill allows vLLM to process large prefills in smaller chunks and batch them with decode requests.
+
+### Benefits
+
+- **Better throughput**: Balances compute-bound (prefill) and memory-bound (decode) operations
+- **Improved inter-token latency**: Decode requests are prioritized
+- **Higher GPU utilization**: Co-locates prefill and decode in the same batch
+
+### How it works
+
+In V1, **chunked prefill is enabled by default**. The scheduler:
+
+1. Prioritizes all pending decode requests
+2. Schedules prefills with remaining `max_num_batched_tokens` budget
+3. Automatically chunks large prefills that don't fit
+
+### Performance tuning
+
+<ParamField path="max_num_batched_tokens" type="int">
+  Controls chunked prefill behavior.
+  
+  - **Smaller values (e.g., 2048)**: Better inter-token latency, fewer prefills slow down decodes
+  - **Larger values (e.g., 16384)**: Better TTFT, more prefill tokens per batch
+  - **For throughput**: Set > 8192, especially for smaller models on large GPUs
+  - **Equals max_model_len**: Almost equivalent to V0 default scheduling (still prioritizes decodes)
+  
+  ```python
+  llm = LLM(
+      model="meta-llama/Llama-3.1-8B-Instruct",
+      max_num_batched_tokens=16384
+  )
+  ```
+</ParamField>
+
+<Warning>
+When chunked prefill is disabled, `max_num_batched_tokens` must be greater than `max_model_len`. Otherwise, vLLM may crash at startup.
+</Warning>
+
+### Related papers
+
+- [Orca: A Distributed Serving System for Transformer-Based Generative Models](https://arxiv.org/pdf/2308.16369)
+- [Sarathi: Efficient LLM Inference by Piggybacking Decodes with Chunked Prefills](https://arxiv.org/pdf/2401.08671)
+
+## Parallelism strategies
+
+vLLM supports multiple parallelism strategies that can be combined.
+
+### Tensor parallelism (TP)
+
+Shards model parameters across GPUs within each layer.
+
+**When to use:**
+- Model too large for single GPU
+- Need more KV cache space per GPU
+
+```python
+llm = LLM(
+    model="meta-llama/Llama-3.3-70B-Instruct",
+    tensor_parallel_size=4
+)
+```
+
+### Pipeline parallelism (PP)
+
+Distributes model layers across GPUs.
+
+**When to use:**
+- Maxed out efficient TP but need more distribution
+- Multi-node deployments
+- Very deep, narrow models
+
+```python
+llm = LLM(
+    model="meta-llama/Llama-3.3-70B-Instruct",
+    tensor_parallel_size=4,
+    pipeline_parallel_size=2
+)
+```
+
+### Expert parallelism (EP)
+
+Specialized parallelism for Mixture of Experts models.
+
+**When to use:**
+- MoE models (DeepSeekV3, Qwen3MoE, Llama-4)
+- Balance expert computation across GPUs
+
+```python
+llm = LLM(
+    model="deepseek-ai/DeepSeek-V3",
+    tensor_parallel_size=8,
+    enable_expert_parallel=True
+)
+```
+
+Uses the same degree of parallelism as TP, but applies to MoE layers instead.
+
+### Data parallelism (DP)
+
+Replicates entire model across GPU sets.
+
+**When to use:**
+- Enough GPUs to replicate model
+- Need to scale throughput, not model size
+- Multi-user environments with request batch isolation
+
+```python
+llm = LLM(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    tensor_parallel_size=2,
+    data_parallel_size=4
+)
+```
+
+<Note>
+MoE layers are sharded by `tensor_parallel_size × data_parallel_size`.
+</Note>
+
+### Batch-level DP for multi-modal encoders
+
+For multi-modal models, you can use batch-level DP to shard input data instead of weights.
+
+**Benefits:**
+- Reduces communication overhead (no all-reduce after every layer)
+- 10% throughput improvement for TP=8
+- 40% additional improvement for Conv3D operations
+
+**Trade-off:**
+- Slightly higher memory usage (encoder weights replicated)
+
+```python
+llm = LLM(
+    model="Qwen/Qwen2.5-VL-72B-Instruct",
+    tensor_parallel_size=4,
+    mm_encoder_tp_mode="data"  # Batch-level DP for vision encoder
+)
+```
+
+<Note>
+Batch-level DP is independent from API request-level DP (controlled by `data_parallel_size`).
+</Note>
+
+**Supported models:**
+- dots_ocr
+- GLM-4.1V or above
+- InternVL
+- Kimi-VL
+- Llama4
+- MiniCPM-V-2.5 or above
+- Qwen2-VL or above
+- Step3
+
+## Input processing optimization
+
+### Parallel processing
+
+Scale input processing with API server scale-out:
+
+```bash
+# 4 API processes, 1 engine core
+vllm serve Qwen/Qwen2.5-VL-3B-Instruct --api-server-count 4
+
+# 4 API processes, 2 engine cores
+vllm serve Qwen/Qwen2.5-VL-3B-Instruct --api-server-count 4 -dp 2
+```
+
+<Note>
+API server scale-out is only available for online inference.
+</Note>
+
+<Warning>
+Default: 8 CPU threads per API server load media items.
+
+With API server scale-out, adjust `VLLM_MEDIA_LOADING_THREAD_COUNT` to avoid CPU exhaustion:
+
+```bash
+export VLLM_MEDIA_LOADING_THREAD_COUNT=4
+vllm serve MODEL --api-server-count 4
+```
+</Warning>
+
+## Multi-modal caching
+
+Avoid repeated processing of the same multi-modal inputs (common in multi-turn conversations).
+
+### Processor caching
+
+Automatically enabled to cache processed multi-modal inputs.
+
+### IPC caching
+
+Automatically enabled when there's 1:1 correspondence between API and engine processes.
+
+#### Key-replicated cache
+
+Default mode. Cache keys exist in both processes, data only in engine process.
+
+#### Shared memory cache
+
+More efficient for multi-worker setups (TP > 1):
+
+```python
+llm = LLM(
+    model="Qwen/Qwen2.5-VL-3B-Instruct",
+    tensor_parallel_size=2,
+    mm_processor_cache_type="shm",
+    mm_processor_cache_gb=8
+)
+```
+
+### Configuration
+
+<ParamField path="mm_processor_cache_gb" type="float" default="4">
+  Size of multi-modal processor cache in GiB.
+  
+  Set to `0` to disable caching.
+  
+  ```python
+  llm = LLM(model="MODEL", mm_processor_cache_gb=8)
+  ```
+</ParamField>
+
+<ParamField path="mm_processor_cache_type" type="str" default="lru">
+  Cache type.
+  
+  Options: `lru`, `shm`
+  
+  ```python
+  llm = LLM(
+      model="MODEL",
+      mm_processor_cache_type="shm",
+      tensor_parallel_size=2
+  )
+  ```
+</ParamField>
+
+## CPU resources for GPU deployments
+
+vLLM V1 uses a multi-process architecture. CPU underprovisioning is a common performance bottleneck.
+
+### Minimum requirements
+
+For deployment with N GPUs:
+
+```
+Minimum physical cores = 2 + N
+```
+
+- 1 API server process
+- 1 engine core process
+- N GPU worker processes (1 per GPU)
+
+<Warning>
+Using fewer physical CPU cores than processes causes severe performance degradation. The engine core runs a busy loop and is very sensitive to CPU starvation.
+</Warning>
+
+<Note>
+With hyperthreading enabled: 1 vCPU = 1 hyperthread = 1/2 physical core
+
+So you need `2 × (2 + N)` minimum vCPUs.
+</Note>
+
+### Data parallel deployments
+
+```
+Minimum physical cores = A + DP + N + (1 if DP > 1 else 0)
+```
+
+Where:
+- A = API server count (defaults to DP)
+- DP = data parallel size
+- N = total number of GPUs
+
+Example with DP=4, TP=2 on 8 GPUs:
+```
+4 API + 4 engines + 8 workers + 1 coordinator = 17 processes
+```
+
+### Performance impact
+
+CPU underprovisioning affects:
+
+- **Input processing**: Tokenization, chat templates, multi-modal loading
+- **Scheduling latency**: Engine core scheduler dispatches tokens to GPUs
+- **Output processing**: Detokenization, networking, streaming responses
+
+If GPU utilization is lower than expected, check CPU availability. More cores and higher clock speeds can significantly improve performance.
+
+## Attention backend selection
+
+vLLM automatically selects the optimal attention backend, but you can override:
+
+```python
+llm = LLM(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    attention_backend="FLASHINFER"
+)
+```
+
+Options: `FLASH_ATTN`, `XFORMERS`, `FLASHINFER`, `TORCH_SDPA`
+
+See [Attention Backend Feature Support](../design/attention_backends) for detailed comparison.
+
+## See also
+
+- [Engine arguments](/configuration/engine-args) - Complete engine configuration reference
+- [Environment variables](/configuration/environment-variables) - Runtime environment configuration
+- [Conserving memory guide](conserving_memory) - Memory optimization strategies

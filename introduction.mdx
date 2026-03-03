@@ -1,0 +1,150 @@
+---
+title: Introduction to vLLM
+description: A high-throughput and memory-efficient inference and serving engine for LLMs
+---
+
+<img
+  src="https://raw.githubusercontent.com/vllm-project/vllm/main/docs/assets/logos/vllm-logo-text-light.png"
+  alt="vLLM Logo"
+  className="block dark:hidden"
+/>
+<img
+  src="https://raw.githubusercontent.com/vllm-project/vllm/main/docs/assets/logos/vllm-logo-text-dark.png"
+  alt="vLLM Logo"
+  className="hidden dark:block"
+/>
+
+## Easy, fast, and cheap LLM serving for everyone
+
+vLLM is a fast and easy-to-use library for LLM inference and serving. Originally developed in the [Sky Computing Lab](https://sky.cs.berkeley.edu) at UC Berkeley, vLLM has evolved into a community-driven project with contributions from both academia and industry.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get started with vLLM in minutes
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Install vLLM on your platform
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/llm">
+    Explore the vLLM API documentation
+  </Card>
+  <Card title="Supported Models" icon="list" href="/models/supported-models">
+    Browse supported LLM models
+  </Card>
+</CardGroup>
+
+## What makes vLLM fast
+
+vLLM delivers state-of-the-art serving throughput through innovative optimizations:
+
+<CardGroup cols={2}>
+  <Card title="PagedAttention" icon="memory">
+    Efficient management of attention key and value memory with breakthrough [PagedAttention](https://blog.vllm.ai/2023/06/20/vllm.html) algorithm
+  </Card>
+  <Card title="Continuous batching" icon="layer-group">
+    Continuous batching of incoming requests maximizes GPU utilization
+  </Card>
+  <Card title="Optimized kernels" icon="microchip">
+    Fast model execution with CUDA/HIP graph and integration with FlashAttention and FlashInfer
+  </Card>
+  <Card title="Quantization support" icon="compress">
+    Advanced quantization methods including GPTQ, AWQ, AutoRound, INT4, INT8, and FP8
+  </Card>
+</CardGroup>
+
+### Performance features
+
+- **Speculative decoding** - Accelerate inference with draft models
+- **Chunked prefill** - Optimize long-context processing
+- **Prefix caching** - Reuse KV cache for common prompts
+
+## Flexibility and ease of use
+
+vLLM is designed to be flexible and easy to integrate into your workflow:
+
+<Steps>
+  <Step title="Seamless HuggingFace integration">
+    Works with popular models from HuggingFace out of the box
+  </Step>
+  <Step title="Multiple decoding algorithms">
+    Support for parallel sampling, beam search, and more
+  </Step>
+  <Step title="OpenAI-compatible API">
+    Drop-in replacement for OpenAI API with compatible server endpoints
+  </Step>
+  <Step title="Distributed inference">
+    Tensor, pipeline, data, and expert parallelism for large-scale deployments
+  </Step>
+</Steps>
+
+### Key capabilities
+
+- **Streaming outputs** - Real-time token generation
+- **Multi-LoRA support** - Serve multiple LoRA adapters simultaneously
+- **Broad hardware support** - NVIDIA GPUs, AMD CPUs/GPUs, Intel CPUs/GPUs, PowerPC CPUs, Arm CPUs, TPU, and more
+- **Hardware plugins** - Support for Intel Gaudi, IBM Spyre, Huawei Ascend, and other accelerators
+
+## Supported model types
+
+vLLM seamlessly supports most popular open-source models on HuggingFace:
+
+<CardGroup cols={2}>
+  <Card title="Transformer LLMs" icon="brain">
+    Llama, Mistral, Qwen, and other transformer-based models
+  </Card>
+  <Card title="Mixture-of-Experts" icon="network-wired">
+    Mixtral, Deepseek-V2, Deepseek-V3, and other MoE architectures
+  </Card>
+  <Card title="Embedding models" icon="vector-square">
+    E5-Mistral and other embedding models
+  </Card>
+  <Card title="Multi-modal LLMs" icon="image">
+    LLaVA and other vision-language models
+  </Card>
+</CardGroup>
+
+<Note>
+  Find the complete list of supported models in the [Supported Models](/models/supported-models) documentation.
+</Note>
+
+## Installation preview
+
+Installing vLLM is simple with pip:
+
+```bash
+pip install vllm
+```
+
+<Tip>
+  We recommend using [uv](https://docs.astral.sh/uv/), a very fast Python environment manager, for the best installation experience. See the [Installation Guide](/installation) for detailed instructions.
+</Tip>
+
+## Community and support
+
+vLLM is a community-driven project with an active ecosystem:
+
+<CardGroup cols={2}>
+  <Card title="GitHub Issues" icon="github" href="https://github.com/vllm-project/vllm/issues">
+    Report bugs and request features
+  </Card>
+  <Card title="Discussion Forum" icon="comments" href="https://discuss.vllm.ai">
+    Connect with fellow users
+  </Card>
+  <Card title="Developer Slack" icon="slack" href="https://slack.vllm.ai">
+    Coordinate contributions and development
+  </Card>
+  <Card title="Blog" icon="newspaper" href="https://blog.vllm.ai">
+    Read latest updates and technical deep dives
+  </Card>
+</CardGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Follow the quickstart" icon="play" href="/quickstart">
+    Run your first inference in minutes
+  </Card>
+  <Card title="Explore the API" icon="book" href="/api/llm">
+    Learn about offline and online inference APIs
+  </Card>
+</CardGroup>

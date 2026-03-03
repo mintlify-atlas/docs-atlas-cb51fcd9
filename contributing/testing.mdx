@@ -1,0 +1,253 @@
+---
+title: Testing guide
+description: Learn how to write and run tests for vLLM models and features
+---
+
+vLLM uses `pytest` to test the codebase. This guide explains how to write unit tests to verify your implementation.
+
+## Running tests
+
+### Basic test execution
+
+```bash
+# Run all tests
+pytest tests/
+
+# Run tests for a single test file with detailed output
+pytest -s -v tests/test_logger.py
+
+# Run tests matching a specific pattern
+pytest -k "test_model" tests/
+```
+
+### Test dependencies
+
+```bash
+# Install the test dependencies used in CI (CUDA only)
+uv pip install -r requirements/common.txt -r requirements/dev.txt --torch-backend=auto
+
+# Install common test dependencies (hardware agnostic)
+uv pip install pytest pytest-asyncio
+```
+
+<Warning>
+  **Known limitations:**
+  - The repository is not fully checked by `mypy`
+  - Not all unit tests pass when run on CPU platforms. If you don't have access to a GPU platform to run unit tests locally, rely on the continuous integration system
+</Warning>
+
+## Required tests for model PRs
+
+These tests are necessary to get your model PR merged into vLLM. Without them, the CI for your PR will fail.
+
+### Model loading test
+
+Include an example HuggingFace repository for your model in `tests/models/registry.py`. This enables a unit test that loads dummy weights to ensure that the model can be initialized in vLLM.
+
+<Steps>
+  <Step title="Add model to registry">
+    Edit `tests/models/registry.py` and add your model:
+
+    ```python tests/models/registry.py
+    # Example entry
+    "YourModelForCausalLM": ModelInfo(
+        model_name="organization/your-model",
+        description="Your model description",
+    ),
+    ```
+  </Step>
+
+  <Step title="Maintain alphabetical order">
+    The list of models in each section should be maintained in alphabetical order.
+  </Step>
+</Steps>
+
+<Tip>
+  If your model requires a development version of HF Transformers, you can set `min_transformers_version` to skip the test in CI until the model is released.
+</Tip>
+
+## Optional tests
+
+These tests are optional to get your PR merged but provide more confidence that your implementation is correct and help avoid future regressions.
+
+### Model correctness tests
+
+These tests compare the model outputs of vLLM against [HF Transformers](https://github.com/huggingface/transformers). Add new tests under the subdirectories of `tests/models`.
+
+#### Generative models
+
+For generative models, there are two levels of correctness tests (defined in `tests/models/utils.py`):
+
+<CodeGroup>
+```python Exact correctness
+# The text outputted by vLLM should exactly match the text outputted by HF
+check_outputs_equal(
+    outputs_0_lst=hf_outputs,
+    outputs_1_lst=vllm_outputs,
+    name_0="hf",
+    name_1="vllm",
+)
+```
+
+```python Logprobs similarity
+# The logprobs outputted by vLLM should be in the top-k logprobs
+# outputted by HF, and vice versa
+check_logprobs_close(
+    outputs_0_lst=hf_outputs,
+    outputs_1_lst=vllm_outputs,
+    name_0="hf",
+    name_1="vllm",
+)
+```
+</CodeGroup>
+
+#### Example test structure
+
+```python tests/models/test_your_model.py
+import pytest
+from vllm import LLM, SamplingParams
+
+@pytest.mark.parametrize("model", ["organization/your-model"])
+def test_your_model_generation(model, example_prompts):
+    """Test that model generates correct outputs."""
+    # Initialize vLLM
+    llm = LLM(model=model, tensor_parallel_size=1)
+    
+    # Generate outputs
+    sampling_params = SamplingParams(temperature=0, max_tokens=32)
+    vllm_outputs = llm.generate(example_prompts, sampling_params)
+    
+    # Compare with HuggingFace
+    # ... comparison logic ...
+```
+
+#### Pooling models
+
+For pooling models, we check the cosine similarity between vLLM and HF outputs, as defined in `tests/models/utils.py`:
+
+```python
+import torch
+from tests.models.utils import check_embeddings_close
+
+# Check cosine similarity
+check_embeddings_close(
+    embeddings_0_lst=hf_embeddings,
+    embeddings_1_lst=vllm_embeddings,
+    name_0="hf",
+    name_1="vllm",
+    tol=1e-2,
+)
+```
+
+## Multi-modal processing tests
+
+### Common tests
+
+Add your model to `tests/models/multimodal/processing/test_common.py` to verify that the following input combinations result in the same outputs:
+
+- Text + multi-modal data
+- Tokens + multi-modal data
+- Text + cached multi-modal data
+- Tokens + cached multi-modal data
+
+```python tests/models/multimodal/processing/test_common.py
+@pytest.mark.parametrize("model_id", [
+    "llava-hf/llava-1.5-7b-hf",
+    "organization/your-multimodal-model",  # Add your model here
+])
+def test_input_combinations(model_id):
+    # Test runs automatically for all models
+    ...
+```
+
+### Model-specific tests
+
+You can add a new file under `tests/models/multimodal/processing` to run tests that only apply to your model.
+
+For example, if the HF processor for your model accepts user-specified keyword arguments, you can verify that the keyword arguments are being applied correctly:
+
+```python tests/models/multimodal/processing/test_your_model.py
+import pytest
+from vllm import LLM
+
+@pytest.mark.parametrize("mm_processor_kwargs", [
+    {"num_crops": 4},
+    {"num_crops": 16},
+])
+def test_processor_kwargs(mm_processor_kwargs):
+    """Test that processor kwargs are applied correctly."""
+    model_id = "organization/your-model"
+    llm = LLM(
+        model=model_id,
+        mm_processor_kwargs=mm_processor_kwargs,
+    )
+    # ... test logic ...
+```
+
+For reference, see `tests/models/multimodal/processing/test_phi3v.py`.
+
+## Best practices
+
+### Test organization
+
+- Place model-specific tests in `tests/models/test_<model_name>.py`
+- Place shared test utilities in `tests/models/utils.py`
+- Place multimodal processing tests in `tests/models/multimodal/processing/`
+
+### Parametrization
+
+Use `pytest.mark.parametrize` to test multiple configurations:
+
+```python
+@pytest.mark.parametrize("dtype", ["float16", "bfloat16"])
+@pytest.mark.parametrize("max_tokens", [32, 128])
+def test_generation(model, dtype, max_tokens):
+    ...
+```
+
+### Fixtures
+
+Use fixtures for common test setup:
+
+```python
+@pytest.fixture
+def example_prompts():
+    return [
+        "Hello, my name is",
+        "The capital of France is",
+        "The largest ocean is",
+    ]
+```
+
+### Markers
+
+Use markers to categorize tests:
+
+```python
+@pytest.mark.slow
+@pytest.mark.gpu
+def test_large_model():
+    ...
+```
+
+## Continuous integration
+
+When you submit a PR, vLLM's CI system will automatically run:
+
+1. **Model loading tests** - Verify your model can be initialized
+2. **Lint checks** - Ensure code follows style guidelines
+3. **Type checks** - Run `mypy` on selected files
+4. **Unit tests** - Run relevant test suites based on changed files
+
+Not all CI checks will be executed initially due to limited computational resources. The reviewer will add the `ready` label when a full CI run is needed.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Adding models" icon="brain" href="/contributing/adding-models">
+    Learn how to implement new models
+  </Card>
+  <Card title="Multimodal support" icon="image" href="/contributing/multimodal-support">
+    Add multimodal capabilities to your model
+  </Card>
+</CardGroup>

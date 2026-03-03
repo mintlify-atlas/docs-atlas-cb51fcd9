@@ -1,0 +1,509 @@
+---
+title: Kubernetes deployment
+description: Deploy and scale vLLM on Kubernetes clusters with GPUs and CPUs
+---
+
+## Overview
+
+Deploying vLLM on Kubernetes enables scalable, production-ready LLM serving with built-in orchestration, health checks, and resource management.
+
+## Prerequisites
+
+- Running Kubernetes cluster (v1.24+)
+- kubectl configured to access your cluster
+- GPU support (for GPU deployments):
+  - [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/getting-started.html) or device plugin
+  - [AMD GPU Device Plugin](https://github.com/ROCm/k8s-device-plugin) (for AMD GPUs)
+
+## CPU deployment
+
+<Warning>
+  CPU deployment is for testing purposes only. Performance will not be comparable to GPU deployment.
+</Warning>
+
+<Steps>
+  <Step title="Create PVC and Secret">
+    Create storage for model cache and Hugging Face token:
+
+    ```bash
+    kubectl apply -f - <<EOF
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: vllm-models
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      volumeMode: Filesystem
+      resources:
+        requests:
+          storage: 50Gi
+    ---
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: hf-token-secret
+    type: Opaque
+    stringData:
+      token: "REPLACE_WITH_TOKEN"
+    EOF
+    ```
+  </Step>
+
+  <Step title="Deploy vLLM server">
+    Select the appropriate image based on your CPU architecture:
+
+    <CodeGroup>
+    ```bash x86_64
+    export VLLM_IMAGE=public.ecr.aws/q9t5s3a7/vllm-cpu-release-repo:latest
+
+    kubectl apply -f - <<EOF
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: vllm-server
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: vllm
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: vllm
+        spec:
+          containers:
+          - name: vllm
+            image: $VLLM_IMAGE
+            command: ["/bin/sh", "-c"]
+            args:
+              - "vllm serve meta-llama/Llama-3.2-1B-Instruct"
+            env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token-secret
+                  key: token
+            ports:
+              - containerPort: 8000
+            volumeMounts:
+              - name: llama-storage
+                mountPath: /root/.cache/huggingface
+          volumes:
+          - name: llama-storage
+            persistentVolumeClaim:
+              claimName: vllm-models
+    EOF
+    ```
+
+    ```bash ARM64
+    export VLLM_IMAGE=public.ecr.aws/q9t5s3a7/vllm-arm64-cpu-release-repo:latest
+
+    kubectl apply -f - <<EOF
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: vllm-server
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: vllm
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: vllm
+        spec:
+          containers:
+          - name: vllm
+            image: $VLLM_IMAGE
+            command: ["/bin/sh", "-c"]
+            args:
+              - "vllm serve meta-llama/Llama-3.2-1B-Instruct"
+            env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token-secret
+                  key: token
+            ports:
+              - containerPort: 8000
+            volumeMounts:
+              - name: llama-storage
+                mountPath: /root/.cache/huggingface
+          volumes:
+          - name: llama-storage
+            persistentVolumeClaim:
+              claimName: vllm-models
+    EOF
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Create Service">
+    Expose the vLLM deployment:
+
+    ```bash
+    kubectl apply -f - <<EOF
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: vllm-server
+    spec:
+      selector:
+        app.kubernetes.io/name: vllm
+      ports:
+      - protocol: TCP
+        port: 8000
+        targetPort: 8000
+      type: ClusterIP
+    EOF
+    ```
+  </Step>
+
+  <Step title="Verify deployment">
+    Check the logs to ensure the server started successfully:
+
+    ```bash
+    kubectl logs -l app.kubernetes.io/name=vllm
+    ```
+
+    You should see:
+    ```
+    INFO:     Started server process [1]
+    INFO:     Waiting for application startup.
+    INFO:     Application startup complete.
+    INFO:     Uvicorn running on http://0.0.0.0:8000
+    ```
+  </Step>
+</Steps>
+
+## GPU deployment
+
+### NVIDIA GPU deployment
+
+<Steps>
+  <Step title="Create resources">
+    Create PVC, Secret, and Deployment:
+
+    <CodeGroup>
+    ```yaml deployment.yaml
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: mistral-7b
+      namespace: default
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 50Gi
+      storageClassName: default
+      volumeMode: Filesystem
+    ---
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: hf-token-secret
+      namespace: default
+    type: Opaque
+    stringData:
+      token: "REPLACE_WITH_TOKEN"
+    ---
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: mistral-7b
+      namespace: default
+      labels:
+        app: mistral-7b
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: mistral-7b
+      template:
+        metadata:
+          labels:
+            app: mistral-7b
+        spec:
+          volumes:
+          - name: cache-volume
+            persistentVolumeClaim:
+              claimName: mistral-7b
+          # vLLM needs shared memory for tensor parallel inference
+          - name: shm
+            emptyDir:
+              medium: Memory
+              sizeLimit: "2Gi"
+          containers:
+          - name: mistral-7b
+            image: vllm/vllm-openai:latest
+            command: ["/bin/sh", "-c"]
+            args:
+              - "vllm serve mistralai/Mistral-7B-Instruct-v0.3 --trust-remote-code --enable-chunked-prefill --max_num_batched_tokens 1024"
+            env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token-secret
+                  key: token
+            ports:
+            - containerPort: 8000
+            resources:
+              limits:
+                cpu: "10"
+                memory: 20G
+                nvidia.com/gpu: "1"
+              requests:
+                cpu: "2"
+                memory: 6G
+                nvidia.com/gpu: "1"
+            volumeMounts:
+            - mountPath: /root/.cache/huggingface
+              name: cache-volume
+            - name: shm
+              mountPath: /dev/shm
+            livenessProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              initialDelaySeconds: 60
+              periodSeconds: 10
+            readinessProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              initialDelaySeconds: 60
+              periodSeconds: 5
+    ```
+    </CodeGroup>
+
+    <Note>
+      The shared memory volume (`/dev/shm`) is essential for tensor parallel inference.
+    </Note>
+  </Step>
+
+  <Step title="Create Service">
+    <CodeGroup>
+    ```yaml service.yaml
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: mistral-7b
+      namespace: default
+    spec:
+      ports:
+      - name: http-mistral-7b
+        port: 80
+        protocol: TCP
+        targetPort: 8000
+      selector:
+        app: mistral-7b
+      sessionAffinity: None
+      type: ClusterIP
+    ```
+    </CodeGroup>
+
+    <Tip>
+      Use `sessionAffinity: ClientIP` to enable prefix caching by routing requests from the same client to the same pod.
+    </Tip>
+  </Step>
+
+  <Step title="Deploy">
+    ```bash
+    kubectl apply -f deployment.yaml
+    kubectl apply -f service.yaml
+    ```
+  </Step>
+
+  <Step title="Test the deployment">
+    ```bash
+    curl http://mistral-7b.default.svc.cluster.local/v1/completions \
+      -H "Content-Type: application/json" \
+      -d '{
+            "model": "mistralai/Mistral-7B-Instruct-v0.3",
+            "prompt": "San Francisco is a",
+            "max_tokens": 7,
+            "temperature": 0
+          }'
+    ```
+  </Step>
+</Steps>
+
+### AMD GPU deployment
+
+For AMD ROCm GPUs (e.g., MI300X):
+
+<CodeGroup>
+```yaml deployment-amd.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mistral-7b
+  namespace: default
+  labels:
+    app: mistral-7b
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mistral-7b
+  template:
+    metadata:
+      labels:
+        app: mistral-7b
+    spec:
+      volumes:
+      - name: cache-volume
+        persistentVolumeClaim:
+          claimName: mistral-7b
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: "8Gi"
+      hostNetwork: true
+      hostIPC: true
+      containers:
+      - name: mistral-7b
+        image: rocm/vllm:rocm6.2_mi300_ubuntu20.04_py3.9_vllm_0.6.4
+        securityContext:
+          seccompProfile:
+            type: Unconfined
+          runAsGroup: 44
+          capabilities:
+            add:
+            - SYS_PTRACE
+        command: ["/bin/sh", "-c"]
+        args:
+          - "vllm serve mistralai/Mistral-7B-v0.3 --port 8000 --trust-remote-code --enable-chunked-prefill --max_num_batched_tokens 1024"
+        env:
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token-secret
+              key: token
+        ports:
+        - containerPort: 8000
+        resources:
+          limits:
+            cpu: "10"
+            memory: 20G
+            amd.com/gpu: "1"
+          requests:
+            cpu: "6"
+            memory: 6G
+            amd.com/gpu: "1"
+        volumeMounts:
+        - name: cache-volume
+          mountPath: /root/.cache/huggingface
+        - name: shm
+          mountPath: /dev/shm
+```
+</CodeGroup>
+
+<Note>
+  See the [ROCm k8s-device-plugin examples](https://github.com/ROCm/k8s-device-plugin/tree/master/example/vllm-serve) for complete setup instructions.
+</Note>
+
+## Multi-GPU deployment
+
+For tensor parallel inference across multiple GPUs:
+
+```yaml
+resources:
+  limits:
+    nvidia.com/gpu: "4"  # 4 GPUs
+  requests:
+    nvidia.com/gpu: "4"
+command:
+  - "vllm"
+  - "serve"
+  - "meta-llama/Meta-Llama-3-70B-Instruct"
+  - "--tensor-parallel-size"
+  - "4"
+```
+
+## Helm deployment
+
+For production deployments, use the official Helm chart:
+
+```bash
+helm repo add vllm https://vllm-project.github.io/vllm-helm-charts
+helm repo update
+
+helm install vllm-deployment vllm/vllm \
+  --set image.repository=vllm/vllm-openai \
+  --set image.tag=latest \
+  --set model.name=meta-llama/Llama-3.2-1B-Instruct \
+  --set resources.nvidia\.com/gpu=1
+```
+
+See the [Helm framework guide](https://docs.vllm.ai/en/latest/deployment/frameworks/helm.html) for detailed configuration options.
+
+## Kubernetes integrations
+
+vLLM supports deployment through various Kubernetes frameworks:
+
+- **[Helm](https://docs.vllm.ai/en/latest/deployment/frameworks/helm.html)** - Official Helm charts
+- **[KServe](https://docs.vllm.ai/en/latest/deployment/integrations/kserve.html)** - Model serving platform
+- **[KubeRay](https://docs.vllm.ai/en/latest/deployment/integrations/kuberay.html)** - Ray on Kubernetes
+- **[KAITO](https://docs.vllm.ai/en/latest/deployment/integrations/kaito.html)** - Kubernetes AI Toolchain Operator
+- **[KubeAI](https://docs.vllm.ai/en/latest/deployment/integrations/kubeai.html)** - Kubernetes AI platform
+- **[Kthena](https://docs.vllm.ai/en/latest/deployment/integrations/kthena.html)** - Multi-tenancy AI platform
+
+## Troubleshooting
+
+### Startup probe failure
+
+If you see `KeyboardInterrupt: terminated` in logs:
+
+```bash
+kubectl get events
+```
+
+If you see `Container $NAME failed startup probe`, increase the `failureThreshold`:
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 120  # Increase for larger models
+  periodSeconds: 10
+  failureThreshold: 30  # Increase threshold
+```
+
+### GPU not detected
+
+Verify GPU resources:
+
+```bash
+kubectl describe node <node-name> | grep nvidia.com/gpu
+```
+
+### Out of memory
+
+1. Increase shared memory volume size
+2. Reduce batch size with `--max-num-batched-tokens`
+3. Use quantization (INT8, FP8)
+
+### Pod stuck in pending
+
+Check resource availability:
+
+```bash
+kubectl describe pod <pod-name>
+```
+
+Common issues:
+- Insufficient GPU resources
+- PVC not bound
+- Image pull errors
+
+## Next steps
+
+- Learn about [cloud provider deployments](/deployment/cloud-providers)
+- Review [production best practices](/deployment/production-guide)
+- Explore [distributed troubleshooting](https://docs.vllm.ai/en/latest/serving/distributed_troubleshooting.html)

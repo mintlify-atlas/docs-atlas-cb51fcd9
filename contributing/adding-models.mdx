@@ -1,0 +1,263 @@
+---
+title: Adding new models
+description: Step-by-step guide to implementing new model architectures in vLLM
+---
+
+This guide walks you through the steps to implement a new model architecture in vLLM.
+
+<Note>
+  Many decoder language models can now be automatically loaded using the [Transformers modeling backend](/models/supported-models#transformers) without having to implement them in vLLM. Try running `vllm serve <model>` first to see if it works!
+</Note>
+
+## Overview
+
+vLLM models are specialized [PyTorch](https://pytorch.org/) models that take advantage of various vLLM features to optimize their performance.
+
+The complexity of integrating a model into vLLM depends heavily on the model's architecture:
+
+- **Simple**: Model shares similar architecture with an existing vLLM model
+- **Moderate**: Model has standard components but unique architecture
+- **Complex**: Model includes new operators (e.g., new attention mechanism)
+
+## Step 1: Bring your model code
+
+First, clone the PyTorch model code from the source repository.
+
+For instance, vLLM's [OPT model](https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/opt.py) was adapted from HuggingFace's [modeling_opt.py](https://github.com/huggingface/transformers/blob/main/src/transformers/models/opt/modeling_opt.py) file.
+
+<Warning>
+  Make sure to review and adhere to the original code's copyright and licensing terms!
+</Warning>
+
+<Tip>
+  It is recommended to find a model similar to yours in [vllm/model_executor/models](https://github.com/vllm-project/vllm/tree/main/vllm/model_executor/models) and adapt it to your model's architecture.
+</Tip>
+
+## Step 2: Make your code compatible with vLLM
+
+### Initialization code
+
+All vLLM modules within the model must include a `prefix` argument in their constructor.
+
+The `prefix` is typically the full name of the module in the model's state dictionary and is crucial for:
+
+- **Runtime support**: vLLM's attention operators are registered in a model's state by their full names
+- **Non-uniform quantization support**: Quantized checkpoints can selectively quantize certain layers. By providing the `prefix` during initialization, vLLM can match the current layer's prefix with the quantization configuration
+
+<CodeGroup>
+```python Initialization pattern
+from torch import nn
+from vllm.config import VllmConfig
+from vllm.model_executor.layers.attention import Attention
+
+class MyAttention(nn.Module):
+    def __init__(self, vllm_config: VllmConfig, prefix: str):
+        super().__init__()
+        self.attn = Attention(prefix=f"{prefix}.attn")
+
+class MyDecoderLayer(nn.Module):
+    def __init__(self, vllm_config: VllmConfig, prefix: str):
+        super().__init__()
+        self.self_attn = MyAttention(
+            vllm_config,
+            prefix=f"{prefix}.self_attn"
+        )
+
+class MyModel(nn.Module):
+    def __init__(self, vllm_config: VllmConfig, prefix: str):
+        super().__init__()
+        self.layers = nn.ModuleList([
+            MyDecoderLayer(
+                vllm_config,
+                prefix=f"{prefix}.layers.{i}"
+            )
+            for i in range(vllm_config.model_config.hf_config.num_hidden_layers)
+        ])
+
+class MyModelForCausalLM(nn.Module):
+    def __init__(self, vllm_config: VllmConfig, prefix: str = ""):
+        super().__init__()
+        self.model = MyModel(vllm_config, prefix=f"{prefix}.model")
+```
+
+```python vllm/model_executor/models/llama.py
+# See actual implementation
+```
+</CodeGroup>
+
+### Computation code
+
+<Steps>
+  <Step title="Add embed_input_ids method">
+    Add an `embed_input_ids` method inside your model module that returns the text embeddings given `input_ids`:
+
+    ```python
+    class MyModel(nn.Module):
+        ...
+
+        def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
+            return self.embed_tokens(input_ids)
+    ```
+
+    This provides a unified interface in case your model is used within a composite multimodal model.
+  </Step>
+
+  <Step title="Rewrite the forward method">
+    Modify the `forward` method to:
+    - Remove unnecessary code (e.g., training-specific code)
+    - Treat `input_ids` and `positions` as flattened tensors with a single batch size dimension
+
+    ```python
+    def forward(
+        self,
+        input_ids: torch.Tensor | None,
+        positions: torch.Tensor,
+        intermediate_tensors: IntermediateTensors | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        ...
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  Currently, vLLM supports the basic multi-head attention mechanism and its variant with rotary positional embeddings. If your model employs a different attention mechanism, you will need to implement a new attention layer in vLLM.
+</Note>
+
+## Step 3: Implement tensor parallelism and quantization support
+
+If your model is too large to fit into a single GPU, you can use tensor parallelism to manage it.
+
+### Parallel layers
+
+Replace your model's linear and embedding layers with their tensor-parallel versions:
+
+| Layer | Purpose | Usage |
+|-------|---------|-------|
+| `VocabParallelEmbedding` | Embedding layer | Input embeddings |
+| `ParallelLMHead` | Output layer | LM head |
+| `ReplicatedLinear` | Replicated linear | No memory saving, inputs and weights replicated |
+| `RowParallelLinear` | Row-parallel linear | Second FFN layer, attention output |
+| `ColumnParallelLinear` | Column-parallel linear | First FFN layer, QKV projection |
+| `MergedColumnParallelLinear` | Merged column-parallel | First FFN layer with weighted activation |
+| `QKVParallelLinear` | QKV projection | Multi-head and grouped-query attention |
+
+### Linear method for quantization
+
+All linear layers above take `linear_method` as an input. vLLM will set this parameter according to different quantization schemes to support weight quantization.
+
+```python
+self.qkv_proj = QKVParallelLinear(
+    hidden_size,
+    head_dim,
+    total_num_heads,
+    total_num_kv_heads,
+    bias=False,
+    linear_method=linear_method,
+)
+```
+
+## Step 4: Implement weight loading logic
+
+Implement the `load_weights` method in your `*ForCausalLM` class. This method should:
+
+1. Load weights from the HuggingFace checkpoint file
+2. Assign them to the corresponding layers in your model
+3. Handle merged layers (`MergedColumnParallelLinear`, `QKVParallelLinear`) by loading separated weight matrices
+
+```python
+class MyModelForCausalLM(nn.Module):
+    ...
+
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
+        stacked_params_mapping = [
+            # (param_name, shard_name, shard_id)
+            ("qkv_proj", "q_proj", "q"),
+            ("qkv_proj", "k_proj", "k"),
+            ("qkv_proj", "v_proj", "v"),
+        ]
+        params_dict = dict(self.named_parameters())
+        for name, loaded_weight in weights:
+            # Handle weight loading logic
+            ...
+```
+
+## Step 5: Special model architectures
+
+### Models with interleaving sliding windows
+
+To support a model with interleaving sliding windows:
+
+1. Make sure the model's `config.json` contains `layer_types`
+2. In the modeling code, parse the correct sliding window value for every layer and pass it to the attention layer's `per_layer_sliding_window` argument
+
+```python
+sliding_window = (
+    config.sliding_window if layer_type == "sliding" else None
+)
+attn = Attention(
+    ...,
+    per_layer_sliding_window=sliding_window,
+)
+```
+
+### Models that use Mamba
+
+vLLM supports three different scenarios:
+
+<Tabs>
+  <Tab title="Mamba-only models">
+    Models that use Mamba layers (Mamba-1 or Mamba-2) but do not use attention layers.
+
+    - Inherit protocol `IsAttentionFree`
+    - Implement class methods `get_mamba_state_dtype_from_config` and `get_mamba_state_shape_from_config`
+    - Use `MambaMixer` (Mamba-1) or `MambaMixer2` (Mamba-2) classes
+    - Add model to `MODELS_CONFIG_MAP` in `vllm/model_executor/models/config.py`
+
+    Example: [`MambaForCausalLM`](https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/mamba.py) (Mamba-1) or [`Mamba2ForCausalLM`](https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/mamba2.py) (Mamba-2)
+  </Tab>
+
+  <Tab title="Hybrid Mamba + Attention">
+    Models that combine Mamba layers (Mamba-1 or Mamba-2) together with attention layers.
+
+    - Inherit protocol `IsHybrid` (instead of `IsAttentionFree`)
+    - Follow the same instructions as Mamba-only models
+    - Not necessary to add to `MODELS_CONFIG_MAP` (runtime defaults inferred from protocol)
+
+    Example: [`JambaForCausalLM`](https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/jamba.py) (Mamba-1) or [`BambaForCausalLM`](https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/bamba.py) (Mamba-2)
+  </Tab>
+
+  <Tab title="Custom Mamba-like layers">
+    Models that combine Mamba-like mechanisms (e.g., Linear Attention, ShortConv) together with attention layers.
+
+    - Inherit from `MambaBase`
+    - Implement methods `get_state_dtype`, `get_state_shape`, `mamba_type`, and `get_attn_backend`
+    - Implement attention meta-data class
+    - Update `MAMBA_TYPE_TO_BACKEND_MAP` and `MambaAttentionBackendEnum`
+    - Wrap layer call in custom op for torch compile and CUDA graphs support
+
+    Example: [`MiniMaxText01ForCausalLM`](https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/minimax_text_01.py)
+  </Tab>
+</Tabs>
+
+## Next steps
+
+After implementing your model:
+
+<CardGroup cols={2}>
+  <Card title="Model registration" icon="file-code" href="/contributing/model-registration">
+    Register your model with vLLM
+  </Card>
+  <Card title="Testing guide" icon="flask" href="/contributing/testing">
+    Write tests for your model
+  </Card>
+  <Card title="Multimodal support" icon="image" href="/contributing/multimodal-support">
+    Add multimodal capabilities
+  </Card>
+</CardGroup>
+
+## Getting help
+
+<Tip>
+  If you are encountering issues while integrating your model into vLLM, feel free to open a [GitHub issue](https://github.com/vllm-project/vllm/issues) or ask on our [developer slack](https://slack.vllm.ai). We will be happy to help you out!
+</Tip>

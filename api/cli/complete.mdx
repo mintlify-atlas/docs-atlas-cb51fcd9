@@ -1,0 +1,245 @@
+---
+title: vllm complete
+description: Interactive text completion interface via API server
+---
+
+The `vllm complete` command provides an interactive text completion interface that connects to a running vLLM API server.
+
+## Basic usage
+
+```bash
+vllm complete [OPTIONS]
+```
+
+## Prerequisites
+
+You need a running vLLM server:
+
+```bash
+# In terminal 1
+vllm serve facebook/opt-125m
+
+# In terminal 2
+vllm complete
+```
+
+## Examples
+
+### Basic interactive completion
+
+```bash
+vllm complete
+```
+
+Starts an interactive session:
+
+```
+Using model: facebook/opt-125m
+Please enter prompt to complete:
+> Once upon a time
+ there was a young girl who lived in a small village...
+> The weather today is
+ sunny and warm with a light breeze...
+```
+
+### Quick single completion
+
+```bash
+vllm complete --quick "The capital of France is"
+```
+
+Generates a single completion and exits:
+
+```
+Using model: facebook/opt-125m
+ Paris, which is located in the northern part of the country.
+```
+
+### Connect to custom server
+
+```bash
+vllm complete --url http://192.168.1.100:8080/v1
+```
+
+### Specify model name
+
+```bash
+vllm complete --model-name gpt-3.5-turbo
+```
+
+### Control output length
+
+```bash
+vllm complete --max-tokens 200
+```
+
+### With API key
+
+```bash
+vllm complete --api-key your-secret-key
+```
+
+## Options
+
+<ParamField path="--url" type="string" default="http://localhost:8000/v1">
+  URL of the running OpenAI-compatible API server.
+</ParamField>
+
+<ParamField path="--model-name" type="string">
+  The model name to use. If not specified, uses the first available model from the server.
+</ParamField>
+
+<ParamField path="--max-tokens" type="integer">
+  Maximum number of tokens to generate per completion.
+</ParamField>
+
+<ParamField path="--quick" type="string">
+  Send a single prompt and exit. Alias: `-q`.
+</ParamField>
+
+<ParamField path="--api-key" type="string">
+  API key for authentication. Can also use `OPENAI_API_KEY` environment variable.
+</ParamField>
+
+## Interactive controls
+
+During an interactive session:
+
+- **Enter**: Submit prompt for completion
+- **Ctrl+C** or **Ctrl+Z**: Exit
+- **Ctrl+D** (EOF): Exit
+
+## Use cases
+
+### Code completion
+
+```bash
+vllm serve codellama/CodeLlama-7b-hf
+```
+
+Then:
+
+```bash
+vllm complete
+```
+
+```
+> def fibonacci(n):
+    """Calculate the nth Fibonacci number."""
+    if n <= 1:
+        return n
+    return fibonacci(n-1) + fibonacci(n-2)
+```
+
+### Story generation
+
+```bash
+vllm complete --max-tokens 500
+```
+
+```
+> In a world where magic was real,
+ the young wizard apprentice discovered an ancient spellbook hidden in the 
+ library's forbidden section. As he opened the dusty tome, glowing runes 
+ appeared on the pages, revealing secrets that had been lost for centuries...
+```
+
+### Text continuation
+
+```bash
+vllm complete -q "The three laws of robotics are:" --max-tokens 150
+```
+
+### Creative writing prompts
+
+```bash
+vllm complete
+```
+
+```
+> Write a haiku about programming:
+Code flows like water,
+Bugs emerge from the shadows,
+Debugger saves all.
+```
+
+## Advanced usage
+
+### Batch completions
+
+Use a script to process multiple prompts:
+
+```bash
+#!/bin/bash
+while IFS= read -r prompt; do
+  vllm complete -q "$prompt" --max-tokens 100
+done < prompts.txt
+```
+
+### With custom parameters via API
+
+For more control, use the REST API directly:
+
+```bash
+curl http://localhost:8000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "facebook/opt-125m",
+    "prompt": "Once upon a time",
+    "max_tokens": 100,
+    "temperature": 0.8,
+    "top_p": 0.95
+  }'
+```
+
+## Comparison with `vllm chat`
+
+Use `vllm complete` for:
+- Raw text completion
+- Base (non-chat) models
+- Single-turn generation
+- Code completion
+- Creative writing
+
+Use `vllm chat` for:
+- Conversational interactions
+- Chat-tuned models
+- Multi-turn dialogues
+- Question answering
+
+## Example: Documentation generation
+
+```bash
+vllm serve codellama/CodeLlama-13b-hf
+```
+
+Then:
+
+```bash
+vllm complete
+```
+
+```
+> def process_data(df, columns):
+    """Process DataFrame columns.
+    
+    Args:
+        df: Input DataFrame
+        columns: List of column names to process
+    
+    Returns:
+        Processed DataFrame with transformed columns
+    """
+```
+
+## Environment variables
+
+<ParamField path="OPENAI_API_KEY" type="string">
+  API key for authentication. Used if `--api-key` is not provided.
+</ParamField>
+
+## Related
+
+- [vllm chat](/api/cli/chat) - Interactive chat interface
+- [vllm serve](/api/cli/serve) - Start the API server
+- [Completions API](/api/rest/completions) - REST API equivalent

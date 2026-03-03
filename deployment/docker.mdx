@@ -1,0 +1,259 @@
+---
+title: Docker deployment
+description: Deploy vLLM using Docker containers for GPU and CPU inference
+---
+
+## Overview
+
+vLLM provides official Docker images for both GPU and CPU deployments. Docker containers ensure consistent environments and simplify deployment across different platforms.
+
+## Pre-built images
+
+vLLM publishes pre-built Docker images to Docker Hub and public ECR registries:
+
+### GPU images
+
+```bash
+# Latest stable release
+docker pull vllm/vllm-openai:latest
+
+# Specific version
+docker pull vllm/vllm-openai:v0.6.4
+```
+
+### CPU images
+
+```bash
+# x86_64 CPU
+docker pull public.ecr.aws/q9t5s3a7/vllm-cpu-release-repo:latest
+
+# ARM64 CPU
+docker pull public.ecr.aws/q9t5s3a7/vllm-arm64-cpu-release-repo:latest
+```
+
+### Specialized images
+
+vLLM provides images for different hardware backends:
+
+- **ROCm (AMD GPUs)**: `vllm/vllm-openai:latest-rocm`
+- **TPU**: Images available via Google Cloud Artifact Registry
+- **XPU (Intel GPUs)**: Custom builds available
+
+## Running vLLM with Docker
+
+<Steps>
+  <Step title="Basic GPU deployment">
+    Run vLLM with a single GPU:
+
+    ```bash
+    docker run --runtime nvidia --gpus all \
+      -v ~/.cache/huggingface:/root/.cache/huggingface \
+      -p 8000:8000 \
+      --ipc=host \
+      vllm/vllm-openai:latest \
+      --model meta-llama/Llama-3.2-1B-Instruct
+    ```
+
+    <Note>
+      The `--ipc=host` flag is required for shared memory access in tensor parallel inference.
+    </Note>
+  </Step>
+
+  <Step title="Configure shared memory">
+    For larger models, increase shared memory:
+
+    ```bash
+    docker run --runtime nvidia --gpus all \
+      -v ~/.cache/huggingface:/root/.cache/huggingface \
+      --shm-size=10.24gb \
+      -p 8000:8000 \
+      vllm/vllm-openai:latest \
+      --model meta-llama/Llama-2-7b-chat-hf \
+      --tensor-parallel-size 2
+    ```
+  </Step>
+
+  <Step title="Use environment variables">
+    Pass Hugging Face token and other configurations:
+
+    ```bash
+    docker run --runtime nvidia --gpus all \
+      -v ~/.cache/huggingface:/root/.cache/huggingface \
+      -e HF_TOKEN=your_token_here \
+      -e VLLM_ENABLE_CUDA_COMPATIBILITY=1 \
+      -p 8000:8000 \
+      --ipc=host \
+      vllm/vllm-openai:latest \
+      --model meta-llama/Meta-Llama-3-8B-Instruct
+    ```
+  </Step>
+</Steps>
+
+## CPU deployment
+
+For CPU-only deployments:
+
+```bash
+docker run -d \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -e HF_TOKEN=your_token_here \
+  -e VLLM_CPU_KVCACHE_SPACE=40 \
+  -e VLLM_CPU_OMP_THREADS_BIND=0-63 \
+  -p 8000:8000 \
+  public.ecr.aws/q9t5s3a7/vllm-cpu-release-repo:latest \
+  --model meta-llama/Llama-3.2-1B-Instruct
+```
+
+<Warning>
+  CPU performance is significantly lower than GPU. Use CPU deployment only for testing or when GPUs are unavailable.
+</Warning>
+
+## Building from source
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/vllm-project/vllm.git
+    cd vllm
+    ```
+  </Step>
+
+  <Step title="Build GPU image">
+    Build the default CUDA image:
+
+    ```bash
+    docker build -f docker/Dockerfile . --tag vllm-custom:latest
+    ```
+
+    <Tip>
+      The build process uses Docker BuildKit for layer caching and parallel builds.
+    </Tip>
+  </Step>
+
+  <Step title="Build with custom CUDA version">
+    ```bash
+    docker build -f docker/Dockerfile . \
+      --build-arg CUDA_VERSION=12.9.1 \
+      --build-arg PYTHON_VERSION=3.12 \
+      --tag vllm-custom:cuda12.9
+    ```
+  </Step>
+
+  <Step title="Build CPU image">
+    ```bash
+    docker build -f docker/Dockerfile.cpu . \
+      --platform=linux/amd64 \
+      --tag vllm-cpu:latest
+    ```
+  </Step>
+
+  <Step title="Build ROCm image for AMD GPUs">
+    ```bash
+    docker build -f docker/Dockerfile.rocm . \
+      --tag vllm-rocm:latest
+    ```
+  </Step>
+</Steps>
+
+## Build arguments
+
+Common build arguments for customization:
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `CUDA_VERSION` | `12.9.1` | CUDA toolkit version |
+| `PYTHON_VERSION` | `3.12` | Python version |
+| `PYTORCH_NIGHTLY` | `0` | Use PyTorch nightly builds |
+| `MAX_JOBS` | `2` | Parallel build jobs |
+| `TORCH_CUDA_ARCH_LIST` | `7.0 7.5 8.0 8.9 9.0 10.0 12.0` | Target GPU architectures |
+| `INSTALL_KV_CONNECTORS` | `false` | Install KV connector dependencies |
+
+## Advanced configurations
+
+### Multi-GPU deployment
+
+```bash
+docker run --runtime nvidia --gpus '"device=0,1,2,3"' \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  --shm-size=16g \
+  -p 8000:8000 \
+  --ipc=host \
+  vllm/vllm-openai:latest \
+  --model meta-llama/Meta-Llama-3-70B-Instruct \
+  --tensor-parallel-size 4
+```
+
+### With proxy settings
+
+```bash
+docker build -f docker/Dockerfile . \
+  --build-arg http_proxy=$http_proxy \
+  --build-arg https_proxy=$https_proxy \
+  --tag vllm-custom:latest
+```
+
+### Docker Compose example
+
+<CodeGroup>
+```yaml docker-compose.yml
+version: '3.8'
+
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    runtime: nvidia
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    ports:
+      - "8000:8000"
+    shm_size: 10gb
+    ipc: host
+    command: >
+      --model meta-llama/Llama-3.2-1B-Instruct
+      --trust-remote-code
+```
+</CodeGroup>
+
+## Load balancing with Nginx
+
+For multiple vLLM instances behind a load balancer, see the [production guide](/deployment/production-guide).
+
+## Troubleshooting
+
+### CUDA compatibility issues
+
+Enable CUDA forward compatibility for older drivers:
+
+```bash
+docker run --runtime nvidia --gpus all \
+  -e VLLM_ENABLE_CUDA_COMPATIBILITY=1 \
+  vllm/vllm-openai:latest \
+  --model meta-llama/Llama-3.2-1B-Instruct
+```
+
+### Out of memory errors
+
+1. Increase shared memory with `--shm-size`
+2. Reduce `max-model-len` parameter
+3. Enable quantization (INT8, FP8)
+
+### Permission errors
+
+Run with user namespace mapping:
+
+```bash
+docker run --runtime nvidia --gpus all \
+  --user $(id -u):$(id -g) \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  vllm/vllm-openai:latest \
+  --model meta-llama/Llama-3.2-1B-Instruct
+```
+
+## Next steps
+
+- Deploy to [Kubernetes](/deployment/kubernetes)
+- Learn about [cloud provider deployments](/deployment/cloud-providers)
+- Review [production best practices](/deployment/production-guide)

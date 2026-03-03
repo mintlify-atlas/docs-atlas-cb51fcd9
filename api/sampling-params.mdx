@@ -1,0 +1,223 @@
+---
+title: SamplingParams
+description: Configure text generation sampling parameters in vLLM
+---
+
+The `SamplingParams` class controls how vLLM generates text, including temperature, top-p sampling, penalties, and stopping conditions.
+
+## Constructor
+
+```python
+from vllm import SamplingParams
+
+sampling_params = SamplingParams(
+    n=1,
+    temperature=0.8,
+    top_p=0.95,
+    max_tokens=100,
+)
+```
+
+## Core parameters
+
+<ParamField path="n" type="int" default="1">
+  Number of output sequences to generate per prompt.
+</ParamField>
+
+<ParamField path="temperature" type="float" default="1.0">
+  Controls randomness in sampling. Lower values (e.g., 0.2) make output more deterministic, higher values (e.g., 1.5) make it more random. Use 0.0 for greedy decoding.
+</ParamField>
+
+<ParamField path="top_p" type="float" default="1.0">
+  Nucleus sampling threshold. Only tokens with cumulative probability mass ≤ top_p are considered. Must be in (0, 1].
+</ParamField>
+
+<ParamField path="top_k" type="int" default="0">
+  Number of highest probability tokens to keep. Set to 0 or -1 to disable.
+</ParamField>
+
+<ParamField path="min_p" type="float" default="0.0">
+  Minimum probability threshold relative to the most likely token. Must be in [0, 1].
+</ParamField>
+
+<ParamField path="max_tokens" type="int | None" default="16">
+  Maximum number of tokens to generate per output sequence.
+</ParamField>
+
+<ParamField path="min_tokens" type="int" default="0">
+  Minimum number of tokens to generate before EOS or stop tokens can be produced.
+</ParamField>
+
+## Penalties
+
+<ParamField path="presence_penalty" type="float" default="0.0">
+  Penalizes tokens that have appeared in the generated text. Values > 0 encourage new tokens, values < 0 encourage repetition. Range: [-2.0, 2.0].
+</ParamField>
+
+<ParamField path="frequency_penalty" type="float" default="0.0">
+  Penalizes tokens based on their frequency in generated text. Values > 0 encourage new tokens, values < 0 encourage repetition. Range: [-2.0, 2.0].
+</ParamField>
+
+<ParamField path="repetition_penalty" type="float" default="1.0">
+  Penalizes tokens based on appearance in prompt and generated text. Values > 1 encourage new tokens, values < 1 encourage repetition. Must be > 0.
+</ParamField>
+
+## Stopping conditions
+
+<ParamField path="stop" type="str | list[str] | None" default="None">
+  String(s) that stop generation when produced. The stop string is not included in output.
+</ParamField>
+
+<ParamField path="stop_token_ids" type="list[int] | None" default="None">
+  Token IDs that stop generation when produced.
+</ParamField>
+
+<ParamField path="ignore_eos" type="bool" default="False">
+  Whether to ignore the EOS token and continue generating.
+</ParamField>
+
+<ParamField path="include_stop_str_in_output" type="bool" default="False">
+  Whether to include stop strings in the output text.
+</ParamField>
+
+## Log probabilities
+
+<ParamField path="logprobs" type="int | None" default="None">
+  Number of log probabilities to return per output token. Set to -1 to return all vocab log probs.
+</ParamField>
+
+<ParamField path="prompt_logprobs" type="int | None" default="None">
+  Number of log probabilities to return per prompt token. Set to -1 to return all vocab log probs.
+</ParamField>
+
+## Output formatting
+
+<ParamField path="detokenize" type="bool" default="True">
+  Whether to detokenize the output tokens to text.
+</ParamField>
+
+<ParamField path="skip_special_tokens" type="bool" default="True">
+  Whether to skip special tokens in the output.
+</ParamField>
+
+<ParamField path="spaces_between_special_tokens" type="bool" default="True">
+  Whether to add spaces between special tokens in the output.
+</ParamField>
+
+## Advanced parameters
+
+<ParamField path="seed" type="int | None" default="None">
+  Random seed for reproducible sampling.
+</ParamField>
+
+<ParamField path="logit_bias" type="dict[int, float] | None" default="None">
+  Bias values to add to logits for specific tokens. Keys are token IDs, values are bias amounts (clamped to [-100, 100]).
+</ParamField>
+
+<ParamField path="allowed_token_ids" type="list[int] | None" default="None">
+  If provided, only these token IDs can be generated.
+</ParamField>
+
+<ParamField path="bad_words" type="list[str] | None" default="None">
+  Words that should not be generated. Prevents the last token of matching sequences from being generated.
+</ParamField>
+
+<ParamField path="structured_outputs" type="StructuredOutputsParams | None" default="None">
+  Parameters for structured output generation (JSON, regex, grammar).
+</ParamField>
+
+<ParamField path="output_kind" type="RequestOutputKind" default="RequestOutputKind.CUMULATIVE">
+  Controls output format:
+  - `CUMULATIVE`: Return entire output in every update
+  - `DELTA`: Return only new tokens in each update  
+  - `FINAL_ONLY`: Return only the final complete output
+</ParamField>
+
+## Example: Creative generation
+
+```python
+from vllm import LLM, SamplingParams
+
+llm = LLM(model="facebook/opt-125m")
+
+# High temperature for creative, diverse outputs
+sampling_params = SamplingParams(
+    temperature=1.2,
+    top_p=0.95,
+    top_k=50,
+    max_tokens=200,
+    presence_penalty=0.5,  # Encourage novel content
+)
+
+prompts = ["Once upon a time"]
+outputs = llm.generate(prompts, sampling_params)
+print(outputs[0].outputs[0].text)
+```
+
+## Example: Deterministic generation
+
+```python
+# Temperature 0 for deterministic output
+sampling_params = SamplingParams(
+    temperature=0.0,
+    max_tokens=100,
+)
+
+outputs = llm.generate(["What is the capital of France?"], sampling_params)
+```
+
+## Example: Constrained generation
+
+```python
+# Stop at specific strings
+sampling_params = SamplingParams(
+    temperature=0.8,
+    max_tokens=500,
+    stop=["\n\n", "END"],
+)
+
+outputs = llm.generate(["Write a short story:"], sampling_params)
+```
+
+## Example: Log probabilities
+
+```python
+# Get log probabilities for top 5 tokens
+sampling_params = SamplingParams(
+    temperature=0.8,
+    max_tokens=50,
+    logprobs=5,
+    prompt_logprobs=5,
+)
+
+outputs = llm.generate(["Hello, my name is"], sampling_params)
+
+# Access log probs
+for output in outputs[0].outputs:
+    if output.logprobs:
+        for token_logprobs in output.logprobs:
+            print(token_logprobs)
+```
+
+## Example: Multiple outputs
+
+```python
+# Generate 5 different completions
+sampling_params = SamplingParams(
+    n=5,
+    temperature=0.9,
+    max_tokens=100,
+)
+
+outputs = llm.generate(["The meaning of life is"], sampling_params)
+
+# outputs[0].outputs will contain 5 different completions
+for i, output in enumerate(outputs[0].outputs):
+    print(f"Output {i}: {output.text}")
+```
+
+## Related
+
+- [LLM](/api/llm) - Use SamplingParams with the LLM class
+- [PoolingParams](/api/pooling-params) - Parameters for pooling models
+- [RequestOutput](/api/outputs#requestoutput) - Output format containing generated text

@@ -1,0 +1,224 @@
+---
+title: LLM class
+description: Python API reference for the vLLM LLM class for offline inference
+---
+
+The `LLM` class is the main interface for offline inference in vLLM. It provides methods for text generation, chat, embeddings, and other tasks.
+
+## Constructor
+
+```python
+from vllm import LLM
+
+llm = LLM(
+    model: str,
+    tokenizer: str | None = None,
+    tokenizer_mode: str = "auto",
+    trust_remote_code: bool = False,
+    tensor_parallel_size: int = 1,
+    dtype: str = "auto",
+    quantization: str | None = None,
+    revision: str | None = None,
+    seed: int = 0,
+    gpu_memory_utilization: float = 0.9,
+    swap_space: float = 4,
+    enforce_eager: bool = False,
+    max_model_len: int | None = None,
+    **kwargs
+)
+```
+
+### Parameters
+
+<ParamField path="model" type="str" required>
+  The name or path of a HuggingFace Transformers model.
+</ParamField>
+
+<ParamField path="tokenizer" type="str | None" default="None">
+  The name or path of a HuggingFace Transformers tokenizer. If None, uses the model path.
+</ParamField>
+
+<ParamField path="tokenizer_mode" type="str" default="auto">
+  The tokenizer mode. `"auto"` will use the fast tokenizer if available, and `"slow"` will always use the slow tokenizer.
+</ParamField>
+
+<ParamField path="skip_tokenizer_init" type="bool" default="False">
+  If true, skip initialization of tokenizer and detokenizer. Expect valid `prompt_token_ids` and `None` for prompt from the input.
+</ParamField>
+
+<ParamField path="trust_remote_code" type="bool" default="False">
+  Trust remote code (e.g., from HuggingFace) when downloading the model and tokenizer.
+</ParamField>
+
+<ParamField path="tensor_parallel_size" type="int" default="1">
+  The number of GPUs to use for distributed execution with tensor parallelism.
+</ParamField>
+
+<ParamField path="dtype" type="str" default="auto">
+  The data type for the model weights and activations. Currently supports `float32`, `float16`, and `bfloat16`. If `auto`, uses the `dtype` attribute from the model config.
+</ParamField>
+
+<ParamField path="quantization" type="str | None" default="None">
+  The method used to quantize the model weights. Supports `"awq"`, `"gptq"`, and `"fp8"` (experimental).
+</ParamField>
+
+<ParamField path="revision" type="str | None" default="None">
+  The specific model version to use. Can be a branch name, tag name, or commit id.
+</ParamField>
+
+<ParamField path="seed" type="int" default="0">
+  The seed to initialize the random number generator for sampling.
+</ParamField>
+
+<ParamField path="gpu_memory_utilization" type="float" default="0.9">
+  The ratio (between 0 and 1) of GPU memory to reserve for the model weights, activations, and KV cache. Higher values increase the KV cache size and improve throughput.
+</ParamField>
+
+<ParamField path="swap_space" type="float" default="4">
+  The size (GiB) of CPU memory per GPU to use as swap space for temporarily storing request states.
+</ParamField>
+
+<ParamField path="enforce_eager" type="bool" default="False">
+  Whether to enforce eager execution. If True, disables CUDA graph and always executes the model in eager mode.
+</ParamField>
+
+<ParamField path="max_model_len" type="int | None" default="None">
+  Maximum sequence length supported by the model. If None, uses the model's config value.
+</ParamField>
+
+## Methods
+
+### generate
+
+```python
+llm.generate(
+    prompts: PromptType | Sequence[PromptType],
+    sampling_params: SamplingParams | Sequence[SamplingParams] | None = None,
+    use_tqdm: bool = True,
+    lora_request: LoRARequest | None = None,
+) -> list[RequestOutput]
+```
+
+Generates completions for the input prompts. Automatically batches prompts for optimal performance.
+
+<ParamField path="prompts" type="str | list[str] | list[int] | list[list[int]]" required>
+  The prompts to the LLM. Can be a string, list of strings, token IDs, or list of token ID sequences.
+</ParamField>
+
+<ParamField path="sampling_params" type="SamplingParams | list[SamplingParams] | None" default="None">
+  The sampling parameters for text generation. If None, uses default parameters. Can be a single value applied to all prompts or a list matching the prompts.
+</ParamField>
+
+<ParamField path="use_tqdm" type="bool" default="True">
+  If True, shows a tqdm progress bar during generation.
+</ParamField>
+
+<ParamField path="lora_request" type="LoRARequest | None" default="None">
+  LoRA request to use for generation, if any.
+</ParamField>
+
+**Returns:** A list of `RequestOutput` objects containing the generated completions in the same order as the input prompts.
+
+### chat
+
+```python
+llm.chat(
+    messages: list[ChatCompletionMessageParam] | Sequence[list[ChatCompletionMessageParam]],
+    sampling_params: SamplingParams | Sequence[SamplingParams] | None = None,
+    use_tqdm: bool = True,
+    lora_request: LoRARequest | None = None,
+    chat_template: str | None = None,
+    add_generation_prompt: bool = True,
+) -> list[RequestOutput]
+```
+
+Generates responses for chat conversations. Converts conversations to prompts using the model's chat template.
+
+<ParamField path="messages" type="list[dict] | list[list[dict]]" required>
+  A conversation or list of conversations. Each conversation is a list of messages with 'role' and 'content' keys.
+</ParamField>
+
+<ParamField path="sampling_params" type="SamplingParams | list[SamplingParams] | None" default="None">
+  The sampling parameters for text generation.
+</ParamField>
+
+<ParamField path="chat_template" type="str | None" default="None">
+  The template to use for structuring the chat. If not provided, uses the model's default chat template.
+</ParamField>
+
+<ParamField path="add_generation_prompt" type="bool" default="True">
+  If True, adds a generation template to each message.
+</ParamField>
+
+**Returns:** A list of `RequestOutput` objects containing the generated responses.
+
+### encode
+
+```python
+llm.encode(
+    prompts: PromptType | Sequence[PromptType],
+    pooling_params: PoolingParams | Sequence[PoolingParams] | None = None,
+    use_tqdm: bool = True,
+    lora_request: LoRARequest | None = None,
+    pooling_task: str | None = None,
+) -> list[PoolingRequestOutput]
+```
+
+Applies pooling to hidden states corresponding to input prompts. Used for embeddings and other pooling tasks.
+
+<ParamField path="prompts" type="str | list[str]" required>
+  The prompts to encode.
+</ParamField>
+
+<ParamField path="pooling_params" type="PoolingParams | list[PoolingParams] | None" default="None">
+  The pooling parameters. If None, uses default pooling parameters.
+</ParamField>
+
+<ParamField path="pooling_task" type="str | None" default="None">
+  The pooling task to perform. Must be one of: `"embed"`, `"classify"`, `"score"`, `"token_embed"`, or `"token_classify"`.
+</ParamField>
+
+**Returns:** A list of `PoolingRequestOutput` objects containing the pooled hidden states.
+
+### embed
+
+```python
+llm.embed(
+    prompts: PromptType | Sequence[PromptType],
+    pooling_params: PoolingParams | Sequence[PoolingParams] | None = None,
+    use_tqdm: bool = True,
+) -> list[EmbeddingRequestOutput]
+```
+
+Generates embedding vectors for each prompt. Convenience method that calls `encode()` with `pooling_task="embed"`.
+
+**Returns:** A list of `EmbeddingRequestOutput` objects containing the embedding vectors.
+
+## Example usage
+
+```python
+from vllm import LLM, SamplingParams
+
+# Initialize the LLM
+llm = LLM(model="facebook/opt-125m")
+
+# Generate text
+prompts = [
+    "Hello, my name is",
+    "The president of the United States is",
+]
+sampling_params = SamplingParams(temperature=0.8, top_p=0.95, max_tokens=100)
+outputs = llm.generate(prompts, sampling_params)
+
+# Print outputs
+for output in outputs:
+    prompt = output.prompt
+    generated_text = output.outputs[0].text
+    print(f"Prompt: {prompt!r}, Generated text: {generated_text!r}")
+```
+
+## Related
+
+- [SamplingParams](/api/sampling-params) - Configure text generation parameters
+- [PoolingParams](/api/pooling-params) - Configure pooling parameters
+- [RequestOutput](/api/outputs#requestoutput) - Output format for completions

@@ -1,0 +1,255 @@
+---
+title: Multimodal models
+description: Vision-language, audio, and video models supported by vLLM
+---
+
+vLLM supports multimodal language models that can process combinations of text, images, video, and audio inputs. These models enable applications like visual question answering, image captioning, video understanding, and speech recognition.
+
+## Supported modalities
+
+The following modalities are supported depending on the model:
+
+- **T** - Text
+- **I** - Image
+- **V** - Video
+- **A** - Audio
+
+Modalities joined by `+` can be used together:
+- `T + I` means text-only, image-only, and text-with-image inputs are supported
+
+Modalities separated by `/` are mutually exclusive:
+- `T / I` means text-only and image-only inputs are supported, but not combined
+
+<Note>
+For hybrid-only models (Llama-4, Step3, Mistral-3, Qwen-3.5), a text-only mode can be enabled by setting all multimodal modalities to 0 using `--language-model-only`. This prevents loading multimodal modules, freeing up GPU memory for KV cache.
+</Note>
+
+## Passing multimodal inputs
+
+See the examples below for how to pass images, videos, and audio to models.
+
+### Image inputs example
+
+```python
+import PIL.Image
+from vllm import LLM
+
+llm = LLM(model="llava-hf/llava-1.5-7b-hf")
+
+prompt = "USER: <image>\nWhat is the content of this image?\nASSISTANT:"
+image = PIL.Image.open("image.jpg")
+
+outputs = llm.generate({
+    "prompt": prompt,
+    "multi_modal_data": {"image": image},
+})
+
+print(outputs[0].outputs[0].text)
+```
+
+### Multiple images example
+
+```python
+from vllm import LLM
+import PIL.Image
+
+llm = LLM(
+    model="microsoft/Phi-3.5-vision-instruct",
+    trust_remote_code=True,
+    max_model_len=4096,
+    limit_mm_per_prompt={"image": 2},
+)
+
+prompt = "<|user|>\n<|image_1|>\n<|image_2|>\nWhat is in each image?<|end|>\n<|assistant|>\n"
+image1 = PIL.Image.open("image1.jpg")
+image2 = PIL.Image.open("image2.jpg")
+
+outputs = llm.generate({
+    "prompt": prompt,
+    "multi_modal_data": {"image": [image1, image2]},
+})
+```
+
+## Popular vision-language models
+
+### LLaVA family
+
+| Architecture | Models | Modalities | Example |
+|--------------|--------|------------|----------|
+| `LlavaForConditionalGeneration` | LLaVA-1.5 | T + I<sup>E+</sup> | `llava-hf/llava-1.5-7b-hf` |
+| `LlavaNextForConditionalGeneration` | LLaVA-NeXT | T + I<sup>E+</sup> | `llava-hf/llava-v1.6-mistral-7b-hf` |
+| `LlavaOnevisionForConditionalGeneration` | LLaVA-Onevision | T + I<sup>+</sup> + V<sup>+</sup> | `llava-hf/llava-onevision-qwen2-7b-ov-hf` |
+
+<sup>E+</sup> indicates the model supports multiple instances of this modality
+
+### Leading multimodal models
+
+<AccordionGroup>
+  <Accordion title="Qwen vision models">
+    | Model | Modalities | Example |
+    |-------|------------|----------|
+    | Qwen2-VL | T + I<sup>E+</sup> + V<sup>E+</sup> | `Qwen/Qwen2-VL-7B-Instruct` |
+    | Qwen3-VL | T + I<sup>E+</sup> + V<sup>E+</sup> | `Qwen/Qwen3-VL-6B` |
+    | Qwen2.5-Omni-Thinker | T + I<sup>E+</sup> + V<sup>E+</sup> + A<sup>E+</sup> | `Qwen/Qwen2.5-Omni-Thinker-7B` |
+  </Accordion>
+
+  <Accordion title="DeepSeek vision models">
+    | Model | Modalities | Example |
+    |-------|------------|----------|
+    | DeepSeek-VL2 | T + I<sup>+</sup> | `deepseek-ai/deepseek-vl2` |
+    | DeepSeek-OCR | T + I<sup>+</sup> | `deepseek-ai/DeepSeek-OCR` |
+    | DeepSeek-OCR-2 | T + I<sup>+</sup> | `deepseek-ai/DeepSeek-OCR-2` |
+  </Accordion>
+
+  <Accordion title="InternVL family">
+    | Model | Modalities | Example |
+    |-------|------------|----------|
+    | InternVL 3.5 | T + I<sup>E+</sup> + V<sup>E+</sup> | `OpenGVLab/InternVL3_5-14B` |
+    | InternVL 3.0 | T + I<sup>E+</sup> + V<sup>E+</sup> | `OpenGVLab/InternVL3-9B` |
+    | Intern-S1 | T + I<sup>E+</sup> + V<sup>E+</sup> | `internlm/Intern-S1` |
+  </Accordion>
+
+  <Accordion title="Llama 4 vision">
+    | Architecture | Modalities | Example |
+    |--------------|------------|----------|
+    | `Llama4ForConditionalGeneration` | T + I<sup>+</sup> | `meta-llama/Llama-4-Scout-17B-16E-Instruct` |
+    | `Llama4ForConditionalGeneration` | T + I<sup>+</sup> | `meta-llama/Llama-4-Maverick-17B-128E-Instruct` |
+  </Accordion>
+
+  <Accordion title="Google Gemma multimodal">
+    | Model | Modalities | Example |
+    |-------|------------|----------|
+    | Gemma 3 | T + I<sup>E+</sup> | `google/gemma-3-4b-it` |
+    | Gemma 3n | T + I + A | `google/gemma-3n-E2B-it` |
+  </Accordion>
+</AccordionGroup>
+
+### Document understanding
+
+Specialized models for OCR and document processing:
+
+| Architecture | Model | Example |
+|--------------|-------|---------|
+| `DotsOCRForCausalLM` | dots.ocr | `rednote-hilab/dots.ocr` |
+| `GlmOcrForConditionalGeneration` | GLM-OCR | `zai-org/GLM-OCR` |
+| `HunYuanVLForConditionalGeneration` | HunyuanOCR | `tencent/HunyuanOCR` |
+| `LightOnOCRForConditionalGeneration` | LightOnOCR | `lightonai/LightOnOCR-1B` |
+| `PaddleOCRVLForConditionalGeneration` | Paddle-OCR | `PaddlePaddle/PaddleOCR-VL` |
+
+## Audio models
+
+vLLM supports audio input models for speech recognition and audio understanding:
+
+| Architecture | Models | Modalities | Example |
+|--------------|--------|------------|----------|
+| `AudioFlamingo3ForConditionalGeneration` | AudioFlamingo3 | T + A | `nvidia/audio-flamingo-3-hf` |
+| `Qwen2AudioForConditionalGeneration` | Qwen2-Audio | T + A<sup>E+</sup> | `Qwen/Qwen2-Audio-7B-Instruct` |
+| `GraniteSpeechForConditionalGeneration` | Granite Speech | T + A | `ibm-granite/granite-speech-3.3-8b` |
+| `WhisperForConditionalGeneration` | Whisper | A | `openai/whisper-large-v3` |
+| `MiDashengLMModel` | MiDashengLM | T + A<sup>+</sup> | `mispeech/midashenglm-7b` |
+
+## Video understanding models
+
+Models that can process video inputs:
+
+| Architecture | Models | Modalities | Example |
+|--------------|--------|------------|----------|
+| `LlavaNextVideoForConditionalGeneration` | LLaVA-NeXT-Video | T + V | `llava-hf/LLaVA-NeXT-Video-7B-hf` |
+| `InternVLChatModel` | InternVideo 2.5 | T + I<sup>E+</sup> + V<sup>E+</sup> | `OpenGVLab/InternVideo2_5_Chat_8B` |
+| `Molmo2ForConditionalGeneration` | Molmo2 | T + I<sup>+</sup> / V | `allenai/Molmo2-8B` |
+| `Ovis2_5` | Ovis2.5 | T + I<sup>+</sup> + V | `AIDC-AI/Ovis2.5-9B` |
+
+## Omnimodal models
+
+Models supporting multiple modalities including text, image, video, and audio:
+
+| Architecture | Models | Modalities | Example |
+|--------------|--------|------------|----------|
+| `MiniCPMO` | MiniCPM-O | T + I<sup>E+</sup> + V<sup>E+</sup> + A<sup>E+</sup> | `openbmb/MiniCPM-o-2_6` |
+| `Qwen3OmniMoeThinkerForConditionalGeneration` | Qwen3-Omni-Thinker | T + I<sup>E+</sup> + V<sup>E+</sup> + A<sup>E+</sup> | Various Qwen3 omni models |
+
+## Special capabilities
+
+### Image generation
+
+Some models support image generation in addition to understanding:
+
+- **Chameleon**: `ChameleonForConditionalGeneration` - T + I (generation + understanding)
+
+### Scientific and domain-specific
+
+- **Molmo**: Open vision-language models from AI2
+- **NVLM-D**: NVIDIA's vision-language model
+- **Aria**: Multimodal mixture-of-experts
+
+## LoRA support
+
+<Note>
+vLLM supports adding LoRA adapters to the language backbone for most multimodal models. Additionally, vLLM experimentally supports adding LoRA to tower and connector modules for some models.
+</Note>
+
+See the [LoRA documentation](/features/lora) for details on using adapters with multimodal models.
+
+## Online serving
+
+Multimodal models can be served via the OpenAI-Compatible Server:
+
+```bash
+vllm serve llava-hf/llava-1.5-7b-hf
+```
+
+Then make requests with images:
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llava-hf/llava-1.5-7b-hf",
+    "messages": [{
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "What is in this image?"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}}
+      ]
+    }]
+  }'
+```
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Memory optimization">
+    - Use `--language-model-only` for hybrid models when only text is needed
+    - Set appropriate `--max-model-len` based on your use case
+    - Use quantization (FP8, INT8) to reduce memory usage
+    - Set `limit_mm_per_prompt` to control maximum media inputs per request
+  </Accordion>
+
+  <Accordion title="Input handling">
+    - Verify the model's expected prompt format from its HuggingFace page
+    - Use appropriate placeholders (e.g., `<image>`, `<|image_1|>`)
+    - For multiple images, check if the model supports it via `limit_mm_per_prompt`
+    - Pre-process images to reduce size when possible
+  </Accordion>
+
+  <Accordion title="Performance tuning">
+    - Enable tensor parallelism for large models: `--tensor-parallel-size`
+    - Use continuous batching for higher throughput
+    - Consider prefix caching for common visual prompts
+    - Profile with different batch sizes to find optimal throughput
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Generative models" icon="robot" href="/models/generative-models">
+    Text-only language models
+  </Card>
+  <Card title="Quantization" icon="compress" href="/models/quantization">
+    Reduce model size with quantization
+  </Card>
+  <Card title="OpenAI API" icon="code" href="/serving/openai-compatible-server">
+    Serve multimodal models via API
+  </Card>
+</CardGroup>
