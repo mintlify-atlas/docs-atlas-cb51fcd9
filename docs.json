@@ -119,7 +119,9 @@
               "api/cli/serve",
               "api/cli/chat",
               "api/cli/complete",
-              "api/cli/benchmark"
+              "api/cli/run-batch",
+              "api/cli/benchmark",
+              "api/cli/collect-env"
             ]
           }
         ]

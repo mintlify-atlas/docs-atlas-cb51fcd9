@@ -1,0 +1,93 @@
+---
+title: vllm collect-env
+description: Collect environment information for debugging
+---
+
+The `vllm collect-env` command collects detailed information about your environment, which is useful for debugging and reporting issues.
+
+## Usage
+
+```bash
+vllm collect-env
+```
+
+## What it collects
+
+The command gathers information about:
+
+- **vLLM version** - Installed vLLM version and commit hash
+- **Python version** - Python interpreter version
+- **PyTorch version** - PyTorch and CUDA versions
+- **GPU information** - NVIDIA/AMD GPU model, driver version, CUDA/ROCm version
+- **CPU information** - CPU model and architecture
+- **Operating system** - OS type and version
+- **Environment variables** - Relevant vLLM environment variables
+- **Dependencies** - Key dependency versions (transformers, xformers, flash-attn, etc.)
+
+## Example output
+
+```bash
+$ vllm collect-env
+
+Collecting environment information...
+vLLM version: 0.6.0
+vLLM commit: abc123def456
+Python version: 3.11.7
+PyTorch version: 2.10.0+cu126
+CUDA version: 12.6
+GPU: NVIDIA A100-SXM4-80GB
+Driver version: 535.129.03
+OS: Linux-5.15.0-1052-aws
+CPU: x86_64 (Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz)
+Transformers version: 4.45.0
+Flash Attention: 2.7.0
+xFormers: 0.0.28
+```
+
+## When to use
+
+Use `vllm collect-env` when:
+
+<CardGroup cols={2}>
+  <Card title="Reporting issues" icon="bug">
+    Include this output when filing GitHub issues
+  </Card>
+  <Card title="Debugging" icon="magnifying-glass">
+    Verify your environment setup and dependencies
+  </Card>
+  <Card title="Version checking" icon="code-branch">
+    Quickly check installed versions of vLLM and dependencies
+  </Card>
+  <Card title="Support requests" icon="life-ring">
+    Provide environment details when asking for help
+  </Card>
+</CardGroup>
+
+## Common issues detected
+
+The command can help identify:
+
+- **CUDA/driver mismatch** - Incompatible CUDA and driver versions
+- **Missing dependencies** - Required packages not installed
+- **Wrong Python version** - Python version outside supported range (3.10-3.13)
+- **GPU not detected** - GPU hardware or driver issues
+
+<Tip>
+  Always run `vllm collect-env` before reporting issues on GitHub. Including this information helps maintainers diagnose problems faster.
+</Tip>
+
+## Saving output to file
+
+```bash
+# Save to file for issue reporting
+vllm collect-env > environment.txt
+
+# Include in GitHub issue
+cat environment.txt
+```
+
+## Related
+
+- [Development setup](/contributing/development-setup) - Setting up a development environment
+- [Installation](/installation) - Installation instructions for different platforms
+- [GitHub Issues](https://github.com/vllm-project/vllm/issues) - Report bugs and issues

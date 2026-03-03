@@ -1,0 +1,123 @@
+---
+title: vllm run-batch
+description: Run batch prompts and write results to file
+---
+
+The `vllm run-batch` command processes batch prompts using vLLM's OpenAI-compatible API and writes results to a file. It supports both local and HTTP input/output files.
+
+## Usage
+
+```bash
+vllm run-batch -i INPUT.jsonl -o OUTPUT.jsonl --model <model> [OPTIONS]
+```
+
+## Basic example
+
+```bash
+# Run batch processing with local files
+vllm run-batch \
+  -i prompts.jsonl \
+  -o results.jsonl \
+  --model meta-llama/Llama-2-7b-hf
+```
+
+## Input format
+
+The input file should be in JSONL format with one request per line, following the OpenAI Batch API format:
+
+```json
+{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "meta-llama/Llama-2-7b-hf", "messages": [{"role": "user", "content": "Hello!"}]}}
+{"custom_id": "request-2", "method": "POST", "url": "/v1/completions", "body": {"model": "meta-llama/Llama-2-7b-hf", "prompt": "Once upon a time"}}
+```
+
+## Output format
+
+Results are written in JSONL format with the response for each request:
+
+```json
+{"id": "batch_req_123", "custom_id": "request-1", "response": {"id": "cmpl-123", "object": "chat.completion", "created": 1234567890, "model": "meta-llama/Llama-2-7b-hf", "choices": [...]}}
+```
+
+## Options
+
+### Required arguments
+
+<ParamField path="-i, --input-file" type="string" required>
+  Input file path (local file or HTTP URL) containing batch requests in JSONL format.
+</ParamField>
+
+<ParamField path="-o, --output-file" type="string" required>
+  Output file path (local file or HTTP URL) where results will be written in JSONL format.
+</ParamField>
+
+<ParamField path="--model" type="string" required>
+  Model name or path to use for batch processing.
+</ParamField>
+
+### Optional arguments
+
+<ParamField path="--enable-metrics" type="boolean" default="false">
+  Enable Prometheus metrics server.
+</ParamField>
+
+<ParamField path="--port" type="integer" default="8000">
+  Port for Prometheus metrics server (when `--enable-metrics` is enabled).
+</ParamField>
+
+<ParamField path="--url" type="string" default="0.0.0.0">
+  Host address for Prometheus metrics server.
+</ParamField>
+
+## Examples
+
+### Local file processing
+
+```bash
+vllm run-batch \
+  -i /path/to/requests.jsonl \
+  -o /path/to/results.jsonl \
+  --model facebook/opt-125m
+```
+
+### With metrics enabled
+
+```bash
+vllm run-batch \
+  -i prompts.jsonl \
+  -o results.jsonl \
+  --model meta-llama/Llama-2-7b-hf \
+  --enable-metrics \
+  --port 9090
+```
+
+### HTTP input/output
+
+```bash
+vllm run-batch \
+  -i https://example.com/requests.jsonl \
+  -o https://example.com/results.jsonl \
+  --model meta-llama/Llama-2-7b-hf
+```
+
+## Use cases
+
+<CardGroup cols={2}>
+  <Card title="Offline batch processing" icon="layer-group">
+    Process large batches of prompts without running a server
+  </Card>
+  <Card title="Data processing pipelines" icon="diagram-project">
+    Integrate with data pipelines using JSONL files
+  </Card>
+  <Card title="Benchmarking" icon="chart-line">
+    Measure throughput on representative workloads
+  </Card>
+  <Card title="Evaluation" icon="flask">
+    Run model evaluations on test datasets
+  </Card>
+</CardGroup>
+
+## Related
+
+- [Offline inference](/serving/offline-inference) - Python API for batch processing
+- [vllm serve](/api/cli/serve) - Start an OpenAI-compatible API server
+- [OpenAI Batch API](https://platform.openai.com/docs/guides/batch) - OpenAI Batch API format specification
